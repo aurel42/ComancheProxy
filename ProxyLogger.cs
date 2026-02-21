@@ -31,6 +31,28 @@ public partial class ProxyLogger(ILogger logger)
     [LoggerMessage(Level = LogLevel.Information, Message = "Bridge session stopped: {Reason}")]
     public partial void LogBridgeStopped(string reason);
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "Packet intercepted: ID={Id}, Size={Size}.")]
-    public partial void LogPacketTrace(uint id, uint size);
+    [LoggerMessage(Level = LogLevel.Information, Message = "Comanche Detect: {Status}")]
+    public partial void LogComancheMode(string status);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Client -> Sim: ID={Id} ({IdName}), Size={Size}.")]
+    public partial void LogClientPacket(uint id, string idName, uint size);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Sim -> Client: ID={Id} ({IdName}), Size={Size}.")]
+    public partial void LogServerPacket(uint id, string idName, uint size);
+
+
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Definition Update: ID={Id}, Size={Size}.")]
+    public partial void LogDefinitionTrace(uint id, uint size);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "AUTOPILOT MASTER transition: {State}")]
+    public partial void LogApState(string state);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "{Message}")]
+    public partial void LogInfo(string message);
+
+    public bool IsEnabled(LogLevel level) => logger.IsEnabled(level);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "{Message}")]
+    public partial void LogStringDebug(string message);
 }

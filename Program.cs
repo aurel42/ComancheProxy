@@ -5,8 +5,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 // Setup Dependency Injection and Logging
+var logLevel = args.Contains("--debug") ? LogLevel.Debug : LogLevel.Information;
+
 var services = new ServiceCollection();
-services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Information));
+services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(logLevel));
 var serviceProvider = services.BuildServiceProvider();
 
 var rawLogger = serviceProvider.GetRequiredService<ILogger<ProxyBridge>>();
@@ -14,9 +16,8 @@ var logger = new ProxyLogger(rawLogger);
 var stateTracker = new StateTracker(logger);
 
 // Redirection Components
-var lVarProvider = new ComancheProxy.Redirection.MockLVarProvider();
 var variableMapper = new ComancheProxy.Redirection.VariableMapper();
-var transformationEngine = new ComancheProxy.Redirection.TransformationEngine(lVarProvider, variableMapper, logger);
+var transformationEngine = new ComancheProxy.Redirection.TransformationEngine(logger);
 
 const int listenPort = 5001;
 const int simPort = 500;
@@ -46,7 +47,7 @@ try
             using var simSocket = new TcpClient();
             await simSocket.ConnectAsync(simAddress, simPort, cts.Token);
             
-            var bridge = new ProxyBridge(clientSocket, simSocket, logger, stateTracker, transformationEngine);
+            var bridge = new ProxyBridge(clientSocket, simSocket, logger, stateTracker, transformationEngine, variableMapper);
             await bridge.RunAsync(cts.Token);
         }
 

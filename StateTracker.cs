@@ -11,12 +11,12 @@ public sealed class StateTracker(ProxyLogger logger)
     private readonly ConcurrentDictionary<uint, DataDefinition> _definitions = new();
     private readonly ConcurrentDictionary<uint, uint> _requestToDefinition = new();
     
-    public bool IsComancheMode { get; private set; }
+    public bool IsComancheMode { get; set; }
 
     /// <summary>
     /// Records an AddToDataDefinition call.
     /// </summary>
-    public void AddVariableToDefinition(uint defineId, string name, string unit, uint dataType)
+    public void AddVariableToDefinition(uint defineId, string name, string unit, uint dataType, bool isRedirected = false, string? originalName = null)
     {
         var definition = _definitions.GetOrAdd(defineId, id => new DataDefinition { DefineId = id });
         
@@ -34,10 +34,10 @@ public sealed class StateTracker(ProxyLogger logger)
         }
 
         uint offset = definition.TotalSize;
-        definition.Variables.Enqueue(new VariableMetadata(name, unit, dataType, offset, size));
+        definition.Variables.Enqueue(new VariableMetadata(name, unit, dataType, offset, size, isRedirected, originalName));
         definition.TotalSize += size;
 
-        logger.LogPacketTrace(defineId, definition.TotalSize);
+        logger.LogDefinitionTrace(defineId, definition.TotalSize);
     }
 
     /// <summary>
@@ -46,22 +46,6 @@ public sealed class StateTracker(ProxyLogger logger)
     public void MapRequest(uint requestId, uint defineId)
     {
         _requestToDefinition[requestId] = defineId;
-    }
-
-    /// <summary>
-    /// Evaluates if the current aircraft is the Comanche.
-    /// </summary>
-    public void UpdateAircraftTitle(ReadOnlySpan<byte> titleData)
-    {
-        // Simple string check on the binary data
-        string title = System.Text.Encoding.ASCII.GetString(titleData).TrimEnd('\0');
-        bool wasComanche = IsComancheMode;
-        IsComancheMode = title.Contains("A2A PA24-250 Comanche", StringComparison.OrdinalIgnoreCase);
-
-        if (wasComanche != IsComancheMode)
-        {
-            logger.LogStarted(IsComancheMode ? "COMANCHE MODE ACTIVATED" : "COMANCHE MODE DEACTIVATED");
-        }
     }
 
     public DataDefinition? GetDefinitionForRequest(uint requestId)

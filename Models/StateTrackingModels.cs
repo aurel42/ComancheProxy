@@ -10,9 +10,7 @@ public record VariableMetadata(
     string Unit,
     uint DataType,
     uint Offset,
-    uint Size,
-    bool IsRedirected = false,
-    string? OriginalName = null);
+    uint Size);
 
 /// <summary>
 /// Represents a grouped data definition requested by the client.

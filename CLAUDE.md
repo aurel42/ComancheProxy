@@ -40,32 +40,48 @@ Client (CLS2Sim) ←→ ProxyBridge ←→ MSFS SimConnect Server
 
 ### Binary Protocol
 
-SimConnect packets have a 12-byte header: `dwSize` (4B) + `dwVersion` (4B) + `dwID` (4B). The proxy identifies packet types via `dwID` to decide when to intercept or transform.
+**Server→client** packets have a 12-byte header: `dwSize` (4B) + `dwVersion` (4B) + `dwID` (4B, bare RecvId).
+
+**Client→server** packets have a 16-byte header: `dwSize` (4B) + `dwVersion` (4B) + `dwID` (4B, `0xF0000000 | SendId`) + `dwSendID` (4B, sequence counter). Payload fields start at offset 16, not 12. Use `dwId & 0xFF` to extract the SendId for matching.
 
 The transformation sequence: intercept `AddToDataDefinition` → record variable definitions → intercept `RequestDataOnSimObject` → link request to definition → patch `RECV_SIMOBJECT_DATA` responses with L-Var values.
 
-## Coding Standards (from .agent/rules/)
+## Coding Rules
 
-**Performance (critical path is latency-sensitive for force-feedback):**
-- Zero-allocation: `Span<byte>`, `ReadOnlySpan<byte>` for packet parsing. `ArrayPool<byte>.Shared` for temp buffers. Avoid `Encoding.GetString()` in hot loops — use `BinaryPrimitives` and `Utf8Parser`.
-- Avoid boxing: generics with `where T : struct`.
-- Channels over queues: `System.Threading.Channels` (Unbounded or Bounded with DropOldest).
-- NativeAOT compatible: no reflection or `Emit` (`PublishAot=true` target).
+These rules are mandatory when generating or refactoring code for ComancheProxy.
 
-**Logging:**
-- Use `[LoggerMessage]` source generators for all high-frequency log calls.
-- Guard expensive serialization with `_logger.IsEnabled(LogLevel.Debug)`.
+### 1. Performance & Latency (The "Critical Path")
 
-**Async patterns:**
-- `ValueTask`/`ValueTask<T>` for methods that usually complete synchronously.
-- Every async method accepts `CancellationToken`. Never `async void`.
+- **Zero-Allocation Buffers:** Use `Span<byte>` and `ReadOnlySpan<byte>` for all packet parsing logic. Use `ArrayPool<byte>.Shared` for temp buffers. Avoid `Encoding.ASCII.GetString()` on high-frequency loops; use `System.Buffers.Text.Utf8Parser` and `BinaryPrimitives` where possible.
+- **Avoid Boxing:** Use generics with `where T : struct` for transformation math to prevent heap allocations.
+- **Channels over Queues:** Use `System.Threading.Channels` (Unbounded or Bounded with DropOldest) for passing data between the SimConnect client and the Mock Server.
+- **NativeAOT Compatibility:** Do not use heavy reflection or dynamic code generation (`Emit`). The project will be compiled with `PublishAot=true`.
 
-**SimConnect specifics:**
-- Struct alignment: `[StructLayout(LayoutKind.Sequential, Pack = 1)]`.
-- Float64 variables at 8-byte aligned offsets within data definitions.
-- `SafeHandle` for pipe/socket resources.
+### 2. High-Performance Logging
 
-**Modern C# style:**
-- File-scoped namespaces, primary constructors for DI, collection expressions `[1, 2, 3]`, switch expressions and pattern matching.
-- XML docs on all public members.
-- Physical quantity variable names include units (e.g., `airspeedKnots`, `altitudeFeet`).
+- **Source Generators:** Use `[LoggerMessage]` source generators for all high-frequency log calls (Trace/Debug) to avoid string interpolation and allocation when the log level is disabled.
+- **Log Level Check:** Always check `_logger.IsEnabled(LogLevel.Debug)` before performing complex data serialization for logs.
+
+### 3. Asynchronous Patterns
+
+- **ValueTask:** Prefer `ValueTask` or `ValueTask<T>` for high-frequency methods that usually complete synchronously to reduce `Task` object overhead.
+- **CancellationToken:** Every async method must accept and respect a `CancellationToken`.
+- **No Async Void:** Never use `async void` except for top-level event handlers.
+
+### 4. SimConnect Specifics
+
+- **Struct Alignment:** All structs mapped to SimConnect data must use `[StructLayout(LayoutKind.Sequential, Pack = 1)]`.
+- **Float64 Alignment:** Float64 variables at 8-byte aligned offsets within data definitions.
+- **Safe Handles:** Use `SafeHandle` for pipe/socket management to ensure clean resource disposal during reconnection cycles.
+
+### 5. Modern C# Syntax
+
+- **File-scoped Namespaces:** Use `namespace MyProject;` to reduce indentation levels.
+- **Primary Constructors:** Use primary constructors for dependency injection in services and managers.
+- **Collection Expressions:** Use `[1, 2, 3]` syntax for array/list initialization.
+- **Pattern Matching:** Favor switch expressions and property patterns for packet ID identification.
+
+### 6. Documentation & Units
+
+- **XML Documentation:** Every public member must have `<summary>` tags.
+- **Units:** Variable names for physical quantities MUST include the unit (e.g., `airspeedKnots`, `altitudeFeet`, `deflectionRadians`).

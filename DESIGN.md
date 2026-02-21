@@ -20,8 +20,10 @@ The proxy operates as a high-fidelity "Man-in-the-Middle" (MitM) bridge over TCP
 
 ### Connectivity Topology
 - **Upstream (Client-Facing):** TCP Listener on `127.0.0.1:5001`.
-- **Downstream (Sim-Facing):** TCP Client connecting to MSFS (default `127.0.0.1:51111`).
-- **L-Var Plane:** A background SimConnect client polling the WASM bridge for specific aircraft states.
+- **Downstream (Sim-Facing):** TCP Client connecting to MSFS (default `127.0.0.1:500`).
+
+### Sidecar L-Var Injection
+Instead of a separate SimConnect client, the proxy injects its own `AddToDataDefinition` + `RequestDataOnSimObject` packets directly into the MSFS TCP stream. The `SidecarInjector` subscribes to A2A Comanche L-Vars (AP status lights, engine data) using a high DefineID (`0xFFFE0000`) to avoid collisions with client-assigned IDs. Sidecar responses are intercepted and dropped before reaching the client; their values are applied as overrides via `TransformationEngine`.
 
 ## 3. Implementation Details: Addressing the "Junior Traps"
 
@@ -55,12 +57,22 @@ The proxy manages two asynchronous loops: **Upstream-to-Downstream** and **Downs
 
 ## 4. Binary Protocol Anatomy
 
-### Header: `SIMCONNECT_RECV` (12 bytes)
+### Server → Client Header (12 bytes)
 | Offset | Type | Field |
 | :--- | :--- | :--- |
 | 0 | DWORD | `dwSize` |
 | 4 | DWORD | `dwVersion` |
-| 8 | DWORD | `dwID` |
+| 8 | DWORD | `dwID` (bare RecvId) |
+
+### Client → Server Header (16 bytes)
+| Offset | Type | Field |
+| :--- | :--- | :--- |
+| 0 | DWORD | `dwSize` |
+| 4 | DWORD | `dwVersion` |
+| 8 | DWORD | `dwID` (`0xF0000000 \| SendId`) |
+| 12 | DWORD | `dwSendID` (packet sequence counter) |
+
+Extract SendId via `dwId & 0xFF`.
 
 ### Transformation Sequence
 1. **Intercept `AddToDataDefinition`**: Record the relationship between `DefineID`, the variable string, and its unit.
@@ -88,9 +100,8 @@ Apply 64-bit alignment guards, refactor for zero-allocation performance, and imp
 
 ## 6. Target Variable Mappings
 
-| Feature | Standard Sim Variable | Accu-Sim / L-Var Source | Format |
+| Feature | Standard Sim Variable | Override Source | Method |
 | :--- | :--- | :--- | :--- |
-| **Engine RPM** | `GENERAL ENG RPM:1` | `L:Eng1_RPM` | Float64 |
-| **Airspeed** | `AIRSPEED INDICATED` | `L:AirspeedIndicated` | Float64 |
-| **AP State** | `AUTOPILOT MASTER` | `L:ApMaster` | Int32 (0/1) |
-| **Prop Thrust** | `PROPELLER THRUST:1` | `L:Eng1_Thrust` | Float64 |
+| **AP State** | `AUTOPILOT MASTER` | 5 AP light L-Vars (OR'd): `L:ApStLight`, `L:ApHdLight`, `L:ApTrkHiLight`, `L:ApTrkLoLight`, `L:ApAltLight` | Sidecar override |
+| **Prop Thrust** | `PROP THRUST:1` | `L:Eng1_Thrust` | Sidecar override |
+| **Engine RPM** | `GENERAL ENG PCT MAX RPM:1` | — | Pass-through (sim value correct for CLS2Sim) |

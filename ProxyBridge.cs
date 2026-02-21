@@ -1,8 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Net.Sockets;
-using System.Linq;
-using System.Runtime.InteropServices;
 using ComancheProxy.Tcp;
 using ComancheProxy.Redirection;
 using Microsoft.Extensions.Logging;
@@ -14,15 +12,18 @@ namespace ComancheProxy;
 /// Manages the bidirectional bridge between the client and the simulator.
 /// </summary>
 public sealed class ProxyBridge(
-    TcpClient clientSocket, 
-    TcpClient simSocket, 
+    TcpClient clientSocket,
+    TcpClient simSocket,
     ProxyLogger logger,
     StateTracker stateTracker,
     TransformationEngine transformationEngine,
-    VariableMapper mapper)
+    SidecarInjector sidecarInjector)
 {
     private readonly CancellationTokenSource _cts = new();
+    private readonly SemaphoreSlim _downstreamWriteLock = new(1, 1);
     private long _clientPacketCounter = 0;
+    private uint _capturedDwVersion;
+    private bool _sidecarInjected;
 
     public async Task RunAsync(CancellationToken externalCt)
     {
@@ -39,13 +40,20 @@ public sealed class ProxyBridge(
         var downstreamFramer = new SimConnectFramer(downstreamStream);
 
         var taskUp = PumpUpstreamToDownstreamAsync(upstreamFramer, downstreamStream, ct);
-        var taskDown = PumpDownstreamToUpstreamAsync(downstreamFramer, upstreamStream, ct);
+        var taskDown = PumpDownstreamToUpstreamAsync(downstreamFramer, downstreamStream, upstreamStream, ct);
 
         try
         {
             var completedTask = await Task.WhenAny(taskUp, taskDown);
             string side = (completedTask == taskUp) ? "Upstream (CLS2Sim)" : "Downstream (MSFS)";
-            logger.LogBridgeStopped($"{side} connection closed.");
+            if (completedTask.IsFaulted)
+            {
+                logger.LogError($"{side} pump FAULTED: {completedTask.Exception?.InnerException?.Message}");
+            }
+            else
+            {
+                logger.LogBridgeStopped($"{side} connection closed.");
+            }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -55,6 +63,7 @@ public sealed class ProxyBridge(
         finally
         {
             _cts.Cancel();
+            _downstreamWriteLock.Dispose();
         }
     }
 
@@ -71,19 +80,29 @@ public sealed class ProxyBridge(
                 packet.CopyTo(sharedBuffer);
                 var span = sharedBuffer.AsSpan(0, (int)packet.Length);
                 InspectClientPacket(span);
-                await target.WriteAsync(sharedBuffer.AsMemory(0, (int)packet.Length), ct);
+
+                await _downstreamWriteLock.WaitAsync(ct);
+                try
+                {
+                    await target.WriteAsync(sharedBuffer.AsMemory(0, (int)packet.Length), ct);
+                    await target.FlushAsync(ct);
+                }
+                finally
+                {
+                    _downstreamWriteLock.Release();
+                }
             }
             finally
             {
                 ArrayPool<byte>.Shared.Return(sharedBuffer);
             }
 
-            await target.FlushAsync(ct);
             framer.AdvanceTo(packet.End);
         }
     }
 
-    private async Task PumpDownstreamToUpstreamAsync(SimConnectFramer framer, NetworkStream target, CancellationToken ct)
+    private async Task PumpDownstreamToUpstreamAsync(
+        SimConnectFramer framer, NetworkStream downstreamStream, NetworkStream upstreamTarget, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
@@ -95,75 +114,81 @@ public sealed class ProxyBridge(
             {
                 packet.CopyTo(sharedBuffer);
                 var span = sharedBuffer.AsSpan(0, (int)packet.Length);
-                int newLength = InspectSimPacket(span);
-                await target.WriteAsync(sharedBuffer.AsMemory(0, newLength), ct);
+
+                var action = InspectSimPacket(span);
+
+                // Handle sidecar injection/cleanup before forwarding
+                if (action == SidecarAction.Inject)
+                {
+                    await InjectSidecarAsync(downstreamStream, ct);
+                }
+                else if (action == SidecarAction.Cleanup)
+                {
+                    await CleanupSidecarAsync(downstreamStream, ct);
+                }
+
+                // Drop sidecar responses — don't forward to CLS2Sim
+                if (action != SidecarAction.Drop)
+                {
+                    await upstreamTarget.WriteAsync(sharedBuffer.AsMemory(0, (int)packet.Length), ct);
+                    await upstreamTarget.FlushAsync(ct);
+                }
             }
             finally
             {
                 ArrayPool<byte>.Shared.Return(sharedBuffer);
             }
-            
-            await target.FlushAsync(ct);
+
             framer.AdvanceTo(packet.End);
         }
     }
 
     /// <summary>
     /// Inspects and tracks state from client-to-simulator packets.
+    /// Captures dwVersion from the first client packet for sidecar injection.
+    /// Packets pass through unmodified — no name rewriting.
     /// </summary>
     private void InspectClientPacket(Span<byte> buffer)
     {
         if (buffer.Length < 12) return;
-        
+
+        // Capture dwVersion from the first client packet
+        if (_capturedDwVersion == 0 && buffer.Length >= 8)
+        {
+            _capturedDwVersion = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(4));
+            logger.LogInfo($"Captured dwVersion={_capturedDwVersion} from first client packet");
+        }
+
         uint dwId = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(8));
 
         _clientPacketCounter++;
-        switch ((Protocol.SendId)dwId)
+        switch ((Protocol.SendId)(dwId & 0xFF))
+        {
+            case Protocol.SendId.AddToDataDefinition:
+                if (buffer.Length >= 536)
                 {
-                    case Protocol.SendId.AddToDataDefinition:
-                        if (buffer.Length >= 536)
-                        {
-                            uint defineId = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(12));
-                            string originalName = Protocol.SimConnectParser.ReadString(buffer.Slice(20), 256).Trim();
-                            string originalUnits = Protocol.SimConnectParser.ReadString(buffer.Slice(276), 256).Trim();
-                            uint type = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(532));
-                            
-                            bool isRedirected = false;
-                            string? mappedLVar = null;
+                    // Offset 12 is dwSendID (sequence), 16 is DefineID.
+                    // DatumName/UnitsName/DatumType stay at 20/276/532 (unchanged).
+                    uint defineId = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(16));
+                    string varName = Protocol.SimConnectParser.ReadString(buffer.Slice(20), 256).Trim();
+                    string varUnits = Protocol.SimConnectParser.ReadString(buffer.Slice(276), 256).Trim();
+                    uint type = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(532));
 
-                            if (mapper.TryGetRedirection(originalName, out mappedLVar) && mappedLVar != null)
-                            {
-                                isRedirected = true;
-                                
-                                logger.LogInfo($"[SendID={_clientPacketCounter}] BEFORE SUBSTITUTION HEX:\n{HexDump(buffer.Slice(0, 64))}");
+                    if (logger.IsEnabled(LogLevel.Debug))
+                    {
+                        logger.LogStringDebug($"[SendID={_clientPacketCounter}] Definition ID={defineId}: Name='{varName}', Units='{varUnits}'");
+                    }
 
-                                // 1. OVERWRITE name in-place 
-                                Span<byte> nameSlot = buffer.Slice(20, 252);
-                                nameSlot.Clear();
-                                System.Text.Encoding.ASCII.GetBytes(mappedLVar, nameSlot);
-                                
-                                // 2. FORCE units to "Number" (Standard SDK capitalization)
-                                Span<byte> unitSlot = buffer.Slice(276, 256);
-                                unitSlot.Clear();
-                                System.Text.Encoding.ASCII.GetBytes("Number", unitSlot);
-                                
-                                logger.LogInfo($"[SendID={_clientPacketCounter}] NATIVE REDIRECTION: '{originalName}' ({originalUnits}) -> '{mappedLVar}' (Number)");
-                                logger.LogInfo($"[SendID={_clientPacketCounter}] AFTER SUBSTITUTION HEX:\n{HexDump(buffer.Slice(0, 64))}");
-                            }
-                            else if (logger.IsEnabled(LogLevel.Debug))
-                            {
-                                logger.LogStringDebug($"[SendID={_clientPacketCounter}] Definition ID={defineId}: Name='{originalName}', Units='{originalUnits}'");
-                            }
-                            
-                            stateTracker.AddVariableToDefinition(defineId, mappedLVar ?? originalName, isRedirected ? "Number" : originalUnits, type, isRedirected, originalName);
-                        }
-                        break;
+                    stateTracker.AddVariableToDefinition(defineId, varName, varUnits, type);
+                }
+                break;
 
             case Protocol.SendId.RequestDataOnSimObject:
-                if (buffer.Length >= 20)
+                if (buffer.Length >= 24)
                 {
-                    uint requestId = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(12));
-                    uint defineId = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(16));
+                    // Offset 12 is dwSendID (sequence number), payload starts at 16
+                    uint requestId = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(16));
+                    uint defineId = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(20));
                     logger.LogClientPacket(dwId, $"RequestData: Req={requestId} Def={defineId}", (uint)buffer.Length);
                     stateTracker.MapRequest(requestId, defineId);
                 }
@@ -173,29 +198,39 @@ public sealed class ProxyBridge(
 
     /// <summary>
     /// Inspects and potentially patches simulator-to-client packets in-place.
+    /// Detects Comanche mode transitions, sidecar responses, and applies overrides.
     /// </summary>
-    /// <returns>The effective length of the packet (which may change due to normalization).</returns>
-    private int InspectSimPacket(Span<byte> buffer)
+    private SidecarAction InspectSimPacket(Span<byte> buffer)
     {
-        if (buffer.Length < 12) return buffer.Length;
-        
+        if (buffer.Length < 12) return SidecarAction.None;
+
         uint dwId = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(8));
+        var sidecarAction = SidecarAction.None;
 
         // Targeted aircraft detection based on configuration path (IDs 5, 8, 15)
         if (dwId == 5 || dwId == 8 || dwId == 15)
         {
             // Zero-allocation scan (Rule 1)
-            // Using case-insensitive check because simulator paths differ (e.g., AIRCRAFT.CFG vs aircraft.cfg)
             if (ContainsAsciiCaseInsensitive(buffer, "aircraft.cfg"u8))
             {
                 bool isComanche = ContainsAsciiCaseInsensitive(buffer, "pa24-250"u8);
-                
+
                 if (isComanche != stateTracker.IsComancheMode)
                 {
                     stateTracker.IsComancheMode = isComanche;
-                    logger.LogInfo(isComanche 
-                        ? "Comanche detected via aircraft.cfg path. Enabling transformations." 
+                    logger.LogInfo(isComanche
+                        ? "Comanche detected via aircraft.cfg path. Enabling transformations."
                         : "Non-Comanche aircraft detected. Disabling transformations.");
+                }
+
+                // Inject sidecar if Comanche is active but not yet injected on this connection
+                if (isComanche && !_sidecarInjected && _capturedDwVersion != 0)
+                {
+                    sidecarAction = SidecarAction.Inject;
+                }
+                else if (!isComanche && _sidecarInjected)
+                {
+                    sidecarAction = SidecarAction.Cleanup;
                 }
             }
         }
@@ -212,39 +247,94 @@ public sealed class ProxyBridge(
         }
         else if (dwId == 8 || dwId == 9) // SimObjectData (8) or SimObjectDataByType (9)
         {
-            uint requestId = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(12));
-            var definition = stateTracker.GetDefinitionForRequest(requestId);
-            
-            if (definition != null && stateTracker.IsComancheMode)
+            if (buffer.Length >= 40)
             {
-                // SIMCONNECT_RECV_SIMOBJECT_DATA has data starting at 40 bytes.
-                // Header(12) + Request(4) + Object(4) + Define(4) + Flags(4) + entry(4) + outof(4) + count(4) = 40
-                if (buffer.Length >= 40)
+                uint requestId = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(12));
+
+                // Check if this is our sidecar response
+                if (SidecarInjector.IsSidecarResponse(requestId))
                 {
-                    // 1. Normalize the payload (casts 8-byte L-Vars back to 4-byte expected slots)
-                    // This also handles passive monitoring and logging.
-                    int newPayloadSize = transformationEngine.NormalizePayload(buffer.Slice(40), definition);
-                    int newTotalSize = 40 + newPayloadSize;
-                    
-                    // 2. Update the packet header with the new total size
-                    BinaryPrimitives.WriteUInt32LittleEndian(buffer, (uint)newTotalSize);
-                    return newTotalSize;
+                    ReadOnlySpan<byte> dataBlock = buffer.Slice(40);
+                    bool stateChanged = sidecarInjector.ProcessResponse(dataBlock);
+
+                    if (stateChanged)
+                    {
+                        logger.LogSidecarApState(sidecarInjector.IsAutopilotActive ? "ACTIVE" : "INACTIVE");
+                    }
+
+                    if (logger.IsEnabled(LogLevel.Debug))
+                    {
+                        sidecarInjector.TryGetOverrideValue("GENERAL ENG PCT MAX RPM:1", out double rpm);
+                        sidecarInjector.TryGetOverrideValue("PROP THRUST:1", out double thrust);
+                        logger.LogSidecarValues(
+                            sidecarInjector.IsAutopilotActive ? "ON" : "OFF",
+                            rpm,
+                            thrust);
+                    }
+
+                    // Drop this packet — don't forward to CLS2Sim
+                    return SidecarAction.Drop;
+                }
+
+                // Normal client data — apply overrides
+                var definition = stateTracker.GetDefinitionForRequest(requestId);
+
+                if (definition != null && stateTracker.IsComancheMode)
+                {
+                    transformationEngine.NormalizePayload(
+                        buffer.Slice(40), definition, stateTracker.IsComancheMode);
                 }
             }
         }
-        
-        return buffer.Length;
+
+        return sidecarAction;
     }
 
-    private static string HexDump(ReadOnlySpan<byte> data)
+    /// <summary>
+    /// Injects sidecar subscription packets into the MSFS stream.
+    /// </summary>
+    private async ValueTask InjectSidecarAsync(NetworkStream downstreamStream, CancellationToken ct)
     {
-        var sb = new System.Text.StringBuilder();
-        for (int i = 0; i < data.Length; i++)
+        if (_sidecarInjected) return;
+
+        byte[] packets = sidecarInjector.BuildInjectionPackets(_capturedDwVersion);
+
+        await _downstreamWriteLock.WaitAsync(ct);
+        try
         {
-            sb.Append(data[i].ToString("X2")).Append(' ');
-            if ((i + 1) % 16 == 0) sb.AppendLine();
+            await downstreamStream.WriteAsync(packets.AsMemory(), ct);
+            await downstreamStream.FlushAsync(ct);
+            _sidecarInjected = true;
+            logger.LogSidecarInjected(packets.Length);
         }
-        return sb.ToString();
+        finally
+        {
+            _downstreamWriteLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Sends a ClearDataDefinition packet to remove the sidecar subscription.
+    /// </summary>
+    private async ValueTask CleanupSidecarAsync(NetworkStream downstreamStream, CancellationToken ct)
+    {
+        if (!_sidecarInjected) return;
+
+        byte[] packet = sidecarInjector.BuildCleanupPacket(_capturedDwVersion);
+
+        await _downstreamWriteLock.WaitAsync(ct);
+        try
+        {
+            await downstreamStream.WriteAsync(packet.AsMemory(), ct);
+            await downstreamStream.FlushAsync(ct);
+            _sidecarInjected = false;
+            sidecarInjector.IsAutopilotActive = false;
+            logger.LogSidecarCleanup();
+        }
+        finally
+        {
+            _downstreamWriteLock.Release();
+        }
     }
 
     private static bool ContainsAsciiCaseInsensitive(ReadOnlySpan<byte> source, ReadOnlySpan<byte> pattern)
@@ -262,7 +352,6 @@ public sealed class ProxyBridge(
 
                 if (s != p)
                 {
-                    // Case insensitive ASCII check: convert BOTH to lower for comparison
                     byte sLow = (s >= 65 && s <= 90) ? (byte)(s + 32) : s;
                     byte pLow = (p >= 65 && p <= 90) ? (byte)(p + 32) : p;
                     if (sLow != pLow)
@@ -275,5 +364,20 @@ public sealed class ProxyBridge(
             if (match) return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Actions the downstream pump can take after inspecting a sim packet.
+    /// </summary>
+    private enum SidecarAction
+    {
+        /// <summary>No special action — forward packet normally.</summary>
+        None,
+        /// <summary>Inject sidecar subscription packets into the MSFS stream.</summary>
+        Inject,
+        /// <summary>Send ClearDataDefinition to remove the sidecar subscription.</summary>
+        Cleanup,
+        /// <summary>Drop this packet — do not forward to CLS2Sim.</summary>
+        Drop
     }
 }

@@ -16,10 +16,10 @@ public sealed class StateTracker(ProxyLogger logger)
     /// <summary>
     /// Records an AddToDataDefinition call.
     /// </summary>
-    public void AddVariableToDefinition(uint defineId, string name, string unit, uint dataType, bool isRedirected = false, string? originalName = null)
+    public void AddVariableToDefinition(uint defineId, string name, string unit, uint dataType)
     {
         var definition = _definitions.GetOrAdd(defineId, id => new DataDefinition { DefineId = id });
-        
+
         var type = (Protocol.SimConnectDataType)dataType;
         uint size = Protocol.DataTypeSize.GetSize(type);
 
@@ -34,7 +34,7 @@ public sealed class StateTracker(ProxyLogger logger)
         }
 
         uint offset = definition.TotalSize;
-        definition.Variables.Enqueue(new VariableMetadata(name, unit, dataType, offset, size, isRedirected, originalName));
+        definition.Variables.Enqueue(new VariableMetadata(name, unit, dataType, offset, size));
         definition.TotalSize += size;
 
         logger.LogDefinitionTrace(defineId, definition.TotalSize);

@@ -45,8 +45,17 @@ public partial class ProxyLogger(ILogger logger)
     [LoggerMessage(Level = LogLevel.Debug, Message = "Definition Update: ID={Id}, Size={Size}.")]
     public partial void LogDefinitionTrace(uint id, uint size);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "AUTOPILOT MASTER transition: {State}")]
-    public partial void LogApState(string state);
+    [LoggerMessage(Level = LogLevel.Information, Message = "Sidecar: autopilot is {State}")]
+    public partial void LogSidecarApState(string state);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Sidecar: injected {ByteCount} bytes into MSFS stream")]
+    public partial void LogSidecarInjected(int byteCount);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Sidecar: cleaned up subscription")]
+    public partial void LogSidecarCleanup();
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Sidecar values: AP={ApState} RPM={Rpm} Thrust={Thrust}")]
+    public partial void LogSidecarValues(string apState, double rpm, double thrust);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "{Message}")]
     public partial void LogInfo(string message);

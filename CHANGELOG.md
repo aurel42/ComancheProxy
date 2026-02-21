@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.1.2] - 2026-02-21
+
+### Added
+- Sidecar L-Var injection: `SidecarInjector` injects `AddToDataDefinition` + `RequestDataOnSimObject` packets to subscribe to A2A Comanche L-Vars directly via the MSFS TCP stream
+- Autopilot state override: aggregates 5 AP status-light L-Vars (`ApStLight`, `ApHdLight`, `ApTrkHiLight`, `ApTrkLoLight`, `ApAltLight`) into `AUTOPILOT MASTER`
+- Prop thrust override: replaces `PROP THRUST:1` with `L:Eng1_Thrust` sidecar value
+- `TransformationEngine` applies sidecar overrides to client data blocks (Int32/Float32/Float64 format-aware)
+- `SendIdExtensions.Wire()` for constructing client→server wire-format packet IDs (`0xF0000000 | SendId`)
+- Sidecar logging: AP state transitions, injection/cleanup events, debug-level value dumps
+
+### Fixed
+- SimConnect client→server protocol: packets use 16-byte header with `0xF0000000 | SendId` prefix and `dwSendID` sequence field — fixed `InspectClientPacket` to mask with `dwId & 0xFF`
+- Corrected `DefineID` offset from 12→16 in `AddToDataDefinition` parsing
+- Corrected `RequestID`/`DefineID` offsets from 12/16→16/20 in `RequestDataOnSimObject` parsing
+- Sidecar re-injection on CLS2Sim reconnection: decoupled from state-change detection, now fires on every new bridge where Comanche is active
+- `RunAsync` now surfaces faulted pump tasks instead of silently reporting "connection closed"
+
+### Changed
+- `VariableMapper` emptied — all redirections now handled via sidecar injection instead of variable name rewriting
+
 ## [0.1.1] - 2026-02-21
 
 - Implement native in-flight packet redirection: rewrite `AddToDataDefinition` packets in-place, swapping sim variable names with L-Var names

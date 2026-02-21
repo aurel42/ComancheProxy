@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Sockets;
 using ComancheProxy;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,8 +16,8 @@ var logger = new ProxyLogger(rawLogger);
 var stateTracker = new StateTracker(logger);
 
 // Redirection Components
-var variableMapper = new ComancheProxy.Redirection.VariableMapper();
-var transformationEngine = new ComancheProxy.Redirection.TransformationEngine(logger);
+var sidecarInjector = new ComancheProxy.Redirection.SidecarInjector();
+var transformationEngine = new ComancheProxy.Redirection.TransformationEngine(sidecarInjector);
 
 const int listenPort = 5001;
 const int simPort = 500;
@@ -39,15 +39,15 @@ try
     {
         logger.LogWaiting("Waiting for CLS2Sim connection...");
         using var clientSocket = await listener.AcceptTcpClientAsync(cts.Token);
-        
+
         logger.LogClientConnected(clientSocket.Client.RemoteEndPoint?.ToString() ?? "Unknown");
 
         try
         {
             using var simSocket = new TcpClient();
             await simSocket.ConnectAsync(simAddress, simPort, cts.Token);
-            
-            var bridge = new ProxyBridge(clientSocket, simSocket, logger, stateTracker, transformationEngine, variableMapper);
+
+            var bridge = new ProxyBridge(clientSocket, simSocket, logger, stateTracker, transformationEngine, sidecarInjector);
             await bridge.RunAsync(cts.Token);
         }
 

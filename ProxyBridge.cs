@@ -79,17 +79,20 @@ public sealed class ProxyBridge(
             {
                 packet.CopyTo(sharedBuffer);
                 var span = sharedBuffer.AsSpan(0, (int)packet.Length);
-                InspectClientPacket(span);
+                bool forward = InspectClientPacket(span);
 
-                await _downstreamWriteLock.WaitAsync(ct);
-                try
+                if (forward)
                 {
-                    await target.WriteAsync(sharedBuffer.AsMemory(0, (int)packet.Length), ct);
-                    await target.FlushAsync(ct);
-                }
-                finally
-                {
-                    _downstreamWriteLock.Release();
+                    await _downstreamWriteLock.WaitAsync(ct);
+                    try
+                    {
+                        await target.WriteAsync(sharedBuffer.AsMemory(0, (int)packet.Length), ct);
+                        await target.FlushAsync(ct);
+                    }
+                    finally
+                    {
+                        _downstreamWriteLock.Release();
+                    }
                 }
             }
             finally
@@ -146,11 +149,11 @@ public sealed class ProxyBridge(
     /// <summary>
     /// Inspects and tracks state from client-to-simulator packets.
     /// Captures dwVersion from the first client packet for sidecar injection.
-    /// Packets pass through unmodified — no name rewriting.
+    /// Returns false to suppress the packet (do not forward to sim).
     /// </summary>
-    private void InspectClientPacket(Span<byte> buffer)
+    private bool InspectClientPacket(Span<byte> buffer)
     {
-        if (buffer.Length < 12) return;
+        if (buffer.Length < 12) return true;
 
         // Capture dwVersion from the first client packet
         if (_capturedDwVersion == 0 && buffer.Length >= 8)
@@ -193,7 +196,52 @@ public sealed class ProxyBridge(
                     stateTracker.MapRequest(requestId, defineId);
                 }
                 break;
+
+            case Protocol.SendId.MapClientEventToSimEvent:
+                if (buffer.Length >= 20)
+                {
+                    uint eventId = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(16));
+                    string eventName = buffer.Length >= 276
+                        ? Protocol.SimConnectParser.ReadString(buffer.Slice(20), 256).Trim()
+                        : "(truncated)";
+                    stateTracker.MapEvent(eventId, eventName);
+                    if (logger.IsEnabled(LogLevel.Debug))
+                    {
+                        logger.LogClientEventMapping(eventId, eventName);
+                    }
+                }
+                break;
+
+            case Protocol.SendId.TransmitClientEvent:
+                if (buffer.Length >= 32)
+                {
+                    uint objectId = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(16));
+                    uint eventId = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(20));
+                    uint data = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(28));
+                    if (logger.IsEnabled(LogLevel.Debug))
+                    {
+                        stateTracker.TryGetEventName(eventId, out string? eventName);
+                        logger.LogClientEvent(eventId, eventName ?? $"(unmapped:{eventId})", data);
+                    }
+                }
+                break;
+
+            case Protocol.SendId.SetDataOnSimObject:
+                if (buffer.Length >= 28)
+                {
+                    uint defineId = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(16));
+                    uint objectId = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(20));
+                    uint dataSize = (uint)buffer.Length - 36; // payload after 36-byte header
+                    if (logger.IsEnabled(LogLevel.Debug))
+                    {
+                        string variables = stateTracker.GetDefinitionSummary(defineId);
+                        logger.LogClientSetData(defineId, variables, dataSize);
+                    }
+                }
+                break;
         }
+
+        return true;
     }
 
     /// <summary>
@@ -264,11 +312,9 @@ public sealed class ProxyBridge(
 
                     if (logger.IsEnabled(LogLevel.Debug))
                     {
-                        sidecarInjector.TryGetOverrideValue("GENERAL ENG PCT MAX RPM:1", out double rpm);
                         sidecarInjector.TryGetOverrideValue("PROP THRUST:1", out double thrust);
                         logger.LogSidecarValues(
                             sidecarInjector.IsAutopilotActive ? "ON" : "OFF",
-                            rpm,
                             thrust);
                     }
 

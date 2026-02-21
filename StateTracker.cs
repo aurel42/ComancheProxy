@@ -10,8 +10,21 @@ public sealed class StateTracker(ProxyLogger logger)
 {
     private readonly ConcurrentDictionary<uint, DataDefinition> _definitions = new();
     private readonly ConcurrentDictionary<uint, uint> _requestToDefinition = new();
-    
+    private readonly ConcurrentDictionary<uint, string> _eventMappings = new();
+
     public bool IsComancheMode { get; set; }
+
+    /// <summary>
+    /// Clears all tracked definitions, request mappings, and event mappings.
+    /// Called between bridge sessions to prevent stale state accumulation.
+    /// </summary>
+    public void Reset()
+    {
+        _definitions.Clear();
+        _requestToDefinition.Clear();
+        _eventMappings.Clear();
+        IsComancheMode = false;
+    }
 
     /// <summary>
     /// Records an AddToDataDefinition call.
@@ -50,8 +63,36 @@ public sealed class StateTracker(ProxyLogger logger)
 
     public DataDefinition? GetDefinitionForRequest(uint requestId)
     {
-        return _requestToDefinition.TryGetValue(requestId, out uint defineId) 
-            ? _definitions.GetValueOrDefault(defineId) 
+        return _requestToDefinition.TryGetValue(requestId, out uint defineId)
+            ? _definitions.GetValueOrDefault(defineId)
             : null;
+    }
+
+    /// <summary>
+    /// Records a MapClientEventToSimEvent mapping.
+    /// </summary>
+    public void MapEvent(uint eventId, string eventName)
+    {
+        _eventMappings[eventId] = eventName;
+    }
+
+    /// <summary>
+    /// Resolves a client event ID to its mapped sim event name.
+    /// </summary>
+    public bool TryGetEventName(uint eventId, out string? name)
+    {
+        return _eventMappings.TryGetValue(eventId, out name);
+    }
+
+    /// <summary>
+    /// Returns a summary of variable names for a given DefineID, for diagnostic logging.
+    /// </summary>
+    public string GetDefinitionSummary(uint defineId)
+    {
+        if (_definitions.TryGetValue(defineId, out var def))
+        {
+            return string.Join(", ", def.Variables.Select(v => v.Name));
+        }
+        return $"(unknown DefineID={defineId})";
     }
 }

@@ -7,8 +7,8 @@ namespace ComancheProxy.Redirection;
 /// <summary>
 /// Injects sidecar L-Var subscriptions into the SimConnect TCP connection and
 /// provides override values for client-facing variables. The A2A Comanche exposes
-/// AP state through five status-light L-Vars rather than AUTOPILOT MASTER, and
-/// engine data through dedicated L-Vars for RPM and thrust.
+/// AP axis control through ApDisableAileron/ApDisableElevator L-Vars (>0.5 = AP active),
+/// and engine data through dedicated L-Vars for RPM and thrust.
 /// </summary>
 public sealed class SidecarInjector
 {
@@ -24,21 +24,26 @@ public sealed class SidecarInjector
 
     private static readonly string[] SidecarLVars =
     [
-        "L:ApStLight",
-        "L:ApHdLight",
-        "L:ApTrkHiLight",
-        "L:ApTrkLoLight",
-        "L:ApAltLight",
-        "L:Eng1_RPM",
+        "L:ApDisableAileron",
+        "L:ApDisableElevator",
         "L:Eng1_Thrust"
     ];
 
-    private readonly double[] _values = new double[7];
+    private readonly double[] _values = new double[3];
 
     /// <summary>
-    /// Thread-safe aggregate autopilot state. True when any AP light L-Var is active.
+    /// Thread-safe aggregate autopilot state. True when either ApDisableAileron or ApDisableElevator is >0.5.
     /// </summary>
     public volatile bool IsAutopilotActive;
+
+    /// <summary>
+    /// Resets all sidecar state between bridge sessions.
+    /// </summary>
+    public void Reset()
+    {
+        IsAutopilotActive = false;
+        Array.Clear(_values);
+    }
 
     /// <summary>
     /// Attempts to get an override value for a client-facing SimConnect variable.
@@ -54,16 +59,9 @@ public sealed class SidecarInjector
             return true;
         }
 
-        // RPM: sim value (percent of max) appears correct for CLS2Sim — no override needed
-        // if (simVarName.Equals("GENERAL ENG PCT MAX RPM:1", StringComparison.OrdinalIgnoreCase))
-        // {
-        //     value = _values[5];
-        //     return true;
-        // }
-
         if (simVarName.Equals("PROP THRUST:1", StringComparison.OrdinalIgnoreCase))
         {
-            value = _values[6];
+            value = _values[2];
             return true;
         }
 
@@ -72,7 +70,7 @@ public sealed class SidecarInjector
     }
 
     /// <summary>
-    /// Builds the injection payload: 7 AddToDataDefinition packets + 1 RequestDataOnSimObject.
+    /// Builds the injection payload: 4 AddToDataDefinition packets + 1 RequestDataOnSimObject.
     /// </summary>
     /// <param name="dwVersion">The protocol version captured from the client's first packet.</param>
     /// <returns>Concatenated binary packets ready to write to the MSFS stream.</returns>
@@ -122,8 +120,8 @@ public sealed class SidecarInjector
 
     /// <summary>
     /// Processes a RECV_SIMOBJECT_DATA payload from our sidecar subscription.
-    /// Reads 7 FLOAT64 values: 5 AP lights + Eng1_RPM + Eng1_Thrust.
-    /// Derives aggregate AP state from the first 5.
+    /// Reads 3 FLOAT64 values: ApDisableAileron + ApDisableElevator + Eng1_Thrust.
+    /// Derives aggregate AP state from the first 2 (either >0.5 means AP controls that axis).
     /// </summary>
     /// <param name="dataBlock">The data payload starting after the 40-byte RECV_SIMOBJECT_DATA header.</param>
     /// <returns>True if autopilot state changed.</returns>
@@ -139,8 +137,8 @@ public sealed class SidecarInjector
                 double val = BinaryPrimitives.ReadDoubleLittleEndian(dataBlock.Slice(varOffset, 8));
                 _values[i] = val;
 
-                // First 5 are AP lights — OR them for aggregate state
-                if (i < 5 && val > 0.5)
+                // First 2 are AP axis-disable flags — OR them for aggregate state
+                if (i < 2 && val > 0.5)
                 {
                     anyApActive = true;
                 }

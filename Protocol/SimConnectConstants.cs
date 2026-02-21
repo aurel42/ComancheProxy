@@ -40,6 +40,7 @@ public enum SendId : uint
     AddToDataDefinition = 12, // CONFIRMED by hex analysis (0x0C)
     ClearDataDefinition = 13,
     RequestDataOnSimObject = 14, // CONFIRMED by hex analysis (0x0E)
+    SetDataOnSimObject = 16,
 }
 
 /// <summary>

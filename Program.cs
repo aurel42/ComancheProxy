@@ -1,14 +1,30 @@
 using System.Net;
 using System.Net.Sockets;
 using ComancheProxy;
+using ComancheProxy.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 // Setup Dependency Injection and Logging
-var logLevel = args.Contains("--debug") ? LogLevel.Debug : LogLevel.Information;
+bool debugMode = args.Contains("--debug");
 
 var services = new ServiceCollection();
-services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(logLevel));
+services.AddLogging(builder =>
+{
+    builder.SetMinimumLevel(debugMode ? LogLevel.Debug : LogLevel.Information);
+
+    // Console always shows Information+ (the important stuff)
+    builder.AddConsole();
+    builder.AddFilter<Microsoft.Extensions.Logging.Console.ConsoleLoggerProvider>(null, LogLevel.Information);
+
+    if (debugMode)
+    {
+        // File captures everything at Debug level — relative to working directory
+        string logPath = Path.Combine(Directory.GetCurrentDirectory(), "logs", "comanche-proxy.log");
+        builder.AddProvider(new FileLoggerProvider(logPath, LogLevel.Debug));
+        Console.WriteLine($"Debug log: {logPath}");
+    }
+});
 var serviceProvider = services.BuildServiceProvider();
 
 var rawLogger = serviceProvider.GetRequiredService<ILogger<ProxyBridge>>();
@@ -31,6 +47,7 @@ Console.CancelKeyPress += (_, e) => {
 
 var listener = new TcpListener(IPAddress.Loopback, listenPort);
 listener.Start();
+logger.LogInfo("ComancheProxy v0.1.4");
 logger.LogStarted($"127.0.0.1:{listenPort}");
 
 try
@@ -44,6 +61,10 @@ try
 
         try
         {
+            // Reset shared state so reconnections start clean
+            stateTracker.Reset();
+            sidecarInjector.Reset();
+
             using var simSocket = new TcpClient();
             await simSocket.ConnectAsync(simAddress, simPort, cts.Token);
 

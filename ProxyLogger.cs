@@ -54,8 +54,9 @@ public partial class ProxyLogger(ILogger logger)
     [LoggerMessage(Level = LogLevel.Information, Message = "Sidecar: cleaned up subscription")]
     public partial void LogSidecarCleanup();
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "Sidecar values: AP={ApState} RPM={Rpm} Thrust={Thrust}")]
-    public partial void LogSidecarValues(string apState, double rpm, double thrust);
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Sidecar values: AP={ApState} Thrust={Thrust}")]
+    public partial void LogSidecarValues(string apState, double thrust);
+
 
     [LoggerMessage(Level = LogLevel.Information, Message = "{Message}")]
     public partial void LogInfo(string message);
@@ -64,4 +65,14 @@ public partial class ProxyLogger(ILogger logger)
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "{Message}")]
     public partial void LogStringDebug(string message);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Client event mapping: EventID={EventId} -> {EventName}")]
+    public partial void LogClientEventMapping(uint eventId, string eventName);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Client TransmitEvent: EventID={EventId} ({EventName}) Data={Data}")]
+    public partial void LogClientEvent(uint eventId, string eventName, uint data);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Client SetData: DefineID={DefineId} ({Variables}) DataSize={DataSize}")]
+    public partial void LogClientSetData(uint defineId, string variables, uint dataSize);
+
 }

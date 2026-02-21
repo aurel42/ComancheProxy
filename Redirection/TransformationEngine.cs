@@ -10,8 +10,14 @@ namespace ComancheProxy.Redirection;
 /// </summary>
 public sealed class TransformationEngine(SidecarInjector sidecarInjector)
 {
+    /// <summary>The raw ELEVATOR TRIM PCT value that maps to 0.0 for CLS2Sim.</summary>
+    private const float ElevatorTrimCenterPct = -0.36f;
+
+    /// <summary>Symmetric half-range for trim recentering (0.64 both sides of center).</summary>
+    private const float ElevatorTrimHalfRange = 0.64f;
+
     /// <summary>
-    /// Applies sidecar overrides to a raw SimConnect data block.
+    /// Applies sidecar overrides and elevator trim recentering to a raw SimConnect data block.
     /// For each variable in the definition, checks if the SidecarInjector has an
     /// override value and writes it in the variable's native format.
     /// </summary>
@@ -22,8 +28,18 @@ public sealed class TransformationEngine(SidecarInjector sidecarInjector)
         foreach (var variable in definition.Variables)
         {
             int currentOffset = (int)variable.Offset;
-
             string varName = variable.Name.Trim();
+
+            // Recenter elevator trim: symmetric linear scaling around -0.36
+            if (varName == "ELEVATOR TRIM PCT"
+                && dataBlock.Length >= currentOffset + (int)variable.Size)
+            {
+                float raw = BinaryPrimitives.ReadSingleLittleEndian(dataBlock.Slice(currentOffset, 4));
+                float recentered = Math.Clamp(
+                    (raw - ElevatorTrimCenterPct) / ElevatorTrimHalfRange, -1.0f, 1.0f);
+                BinaryPrimitives.WriteSingleLittleEndian(dataBlock.Slice(currentOffset, 4), recentered);
+            }
+
             if (sidecarInjector.TryGetOverrideValue(varName, out double overrideValue))
             {
                 if (dataBlock.Length >= currentOffset + (int)variable.Size)

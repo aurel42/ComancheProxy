@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.4] - 2026-02-21
+
+### Added
+- Elevator trim recentering: symmetric linear scaling recenters `ELEVATOR TRIM PCT` from -0.36 → 0.0 with ±0.64 half-range, clamped to [-1, +1] — fixes CLS2Sim force-feedback center offset on the A2A Comanche
+- Client packet inspection: decode `MapClientEventToSimEvent`, `TransmitClientEvent`, and `SetDataOnSimObject` at Debug level
+- Debug file logging: `--debug` writes Debug-level output to `logs/comanche-proxy.log` while console stays at Information level
+- Session state reset on reconnection: `StateTracker.Reset()` and `SidecarInjector.Reset()` clear stale state between bridge sessions
+
+### Changed
+- AP detection rewritten: replaced 5 status-light L-Vars (`ApStLight`, `ApHdLight`, `ApTrkHiLight`, `ApTrkLoLight`, `ApAltLight`) with 2 axis-disable L-Vars (`ApDisableAileron`, `ApDisableElevator`) for reliable autopilot state detection
+- Upstream pump now supports packet suppression (`InspectClientPacket` returns `bool`)
+
 ## [0.1.2] - 2026-02-21
 
 ### Added

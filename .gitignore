@@ -8,3 +8,4 @@ logs/
 *.userprefs
 *.launch
 *.lock.json
+.claude/settings.local.json

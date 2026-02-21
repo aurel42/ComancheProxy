@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.6] - 2026-02-21
+
+### Changed
+- Rewrote `DESIGN.md` to match the implemented architecture — removed stale roadmap, WASM bridge references, and old AP detection scheme; added component responsibility map, sidecar lifecycle, session lifecycle, performance constraints table, and transformation sequence walkthrough
+
+### Fixed
+- Corrected erroneous WASM bridge reference in `README.md` — proxy uses sidecar TCP injection, not a WASM bridge
+- Removed hardcoded MSFS port numbers from all documentation — only the listen port (`5001`) is documented
+- Updated `CLAUDE.md` component descriptions to reflect current implementation (sidecar injector, volatile IsComancheMode, List over ConcurrentQueue, IAsyncDisposable framers)
+
 ## [0.1.5] - 2026-02-21
 
 ### Fixed

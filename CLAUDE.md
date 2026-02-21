@@ -15,27 +15,28 @@ Target framework: .NET 10.0, C# 13 with nullable reference types and implicit us
 
 ## Architecture
 
-ComancheProxy is a transparent TCP Man-in-the-Middle proxy for MSFS SimConnect. It sits between a SimConnect client (CLS2Sim force-feedback) on `127.0.0.1:5001` and the MSFS SimConnect server on `127.0.0.1:51111`.
+ComancheProxy is a transparent TCP Man-in-the-Middle proxy for MSFS SimConnect. It listens on `127.0.0.1:5001` for the SimConnect client (CLS2Sim force-feedback) and relays traffic to the MSFS SimConnect server.
 
-**Default behavior:** pass-through relay of all SimConnect binary packets. When the A2A Comanche aircraft is detected, the proxy enters redirection mode — rewriting variable requests in-flight so the client unknowingly receives high-fidelity L-Var values instead of standard sim variables.
+**Default behavior:** pass-through relay of all SimConnect binary packets. When the A2A Comanche aircraft is detected, the proxy enters redirection mode — injecting sidecar L-Var subscriptions into the MSFS TCP stream and overwriting client-facing data responses with high-fidelity values.
 
 ### Packet Flow
 
 ```
 Client (CLS2Sim) ←→ ProxyBridge ←→ MSFS SimConnect Server
-        :5001          ↕              :51111
+        :5001          ↕
                   StateTracker
                   TransformationEngine
+                  SidecarInjector
 ```
 
 ### Key Components
 
-- **ProxyBridge** — Bidirectional TCP relay. Runs two async pump loops (upstream→downstream, downstream→upstream). Inspects client packets for `AddToDataDefinition` and `RequestDataOnSimObject`; inspects sim packets for aircraft detection and `SIMOBJECT_DATA` response patching.
-- **SimConnectFramer** (`Tcp/`) — Binary framing via `PipeReader`. Each SimConnect packet starts with a 4-byte `dwSize` header. Handles TCP fragmentation correctly. Validates packet bounds (12B min, 1MB max).
-- **StateTracker** — Thread-safe state using `ConcurrentDictionary`. Maps DefineIDs to variable lists and RequestIDs to DefineIDs. Tracks `IsComancheMode` flag.
-- **TransformationEngine** (`Redirection/`) — Normalizes L-Var responses (8-byte Float64) back to client-expected formats (4-byte Int32/Float32) by in-place buffer manipulation. Monitors autopilot state transitions.
-- **VariableMapper** (`Redirection/`) — Dictionary of standard sim variable → L-Var mappings (e.g., `GENERAL ENG PCT MAX RPM:1` → `L:Eng1_RPM`).
-- **StateTrackingModels** (`Models/`) — `VariableMetadata` record (name, unit, type, offset, size, redirection flag) and `DataDefinition` class with `ConcurrentQueue<VariableMetadata>`.
+- **ProxyBridge** — Bidirectional TCP relay. Runs two async pump loops (upstream→downstream, downstream→upstream). Inspects client packets for `AddToDataDefinition` and `RequestDataOnSimObject`; inspects sim packets for aircraft detection, sidecar response processing, and `SIMOBJECT_DATA` response patching. Disposes framers (`IAsyncDisposable`) and CTS on teardown; observes both pump tasks to prevent unobserved exceptions.
+- **SimConnectFramer** (`Tcp/`) — Binary framing via `PipeReader`, implements `IAsyncDisposable`. Each SimConnect packet starts with a 4-byte `dwSize` header. Handles TCP fragmentation correctly. Validates packet bounds (12B min, 1MB max).
+- **StateTracker** — Thread-safe state using `ConcurrentDictionary`. Maps DefineIDs to variable lists (`List<VariableMetadata>`) and RequestIDs to DefineIDs. Tracks `IsComancheMode` via `volatile` backing field. Trims variable names once at storage time.
+- **TransformationEngine** (`Redirection/`) — Applies sidecar overrides (AP state, prop thrust) and elevator trim recentering to client data blocks. Writes values in the variable's native format (Int32/Float32/Float64) via `BinaryPrimitives`.
+- **SidecarInjector** (`Redirection/`) — Injects `AddToDataDefinition` + `RequestDataOnSimObject` packets for A2A L-Vars (`ApDisableAileron`, `ApDisableElevator`, `Eng1_Thrust`) directly into the MSFS TCP stream. Intercepts and drops sidecar responses; provides override values to `TransformationEngine`.
+- **StateTrackingModels** (`Models/`) — `VariableMetadata` record (name, unit, type, offset, size) and `DataDefinition` class with `List<VariableMetadata>`.
 - **SimConnectConstants/Parser** (`Protocol/`) — Enums for RecvId, SendId, SimConnectDataType, plus binary parsing helpers using `BinaryPrimitives`.
 
 ### Binary Protocol

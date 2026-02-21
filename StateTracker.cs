@@ -12,7 +12,16 @@ public sealed class StateTracker(ProxyLogger logger)
     private readonly ConcurrentDictionary<uint, uint> _requestToDefinition = new();
     private readonly ConcurrentDictionary<uint, string> _eventMappings = new();
 
-    public bool IsComancheMode { get; set; }
+    private volatile bool _isComancheMode;
+
+    /// <summary>
+    /// Whether the A2A Comanche aircraft is currently active. Volatile for cross-thread visibility.
+    /// </summary>
+    public bool IsComancheMode
+    {
+        get => _isComancheMode;
+        set => _isComancheMode = value;
+    }
 
     /// <summary>
     /// Clears all tracked definitions, request mappings, and event mappings.
@@ -47,7 +56,7 @@ public sealed class StateTracker(ProxyLogger logger)
         }
 
         uint offset = definition.TotalSize;
-        definition.Variables.Enqueue(new VariableMetadata(name, unit, dataType, offset, size));
+        definition.Variables.Add(new VariableMetadata(name.Trim(), unit.Trim(), dataType, offset, size));
         definition.TotalSize += size;
 
         logger.LogDefinitionTrace(defineId, definition.TotalSize);

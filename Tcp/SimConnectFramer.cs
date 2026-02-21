@@ -7,7 +7,7 @@ namespace ComancheProxy.Tcp;
 /// <summary>
 /// Handles SimConnect binary protocol framing over a byte stream.
 /// </summary>
-public sealed class SimConnectFramer(NetworkStream networkStream)
+public sealed class SimConnectFramer(NetworkStream networkStream) : IAsyncDisposable
 {
     private readonly PipeReader _reader = PipeReader.Create(networkStream);
 
@@ -75,5 +75,13 @@ public sealed class SimConnectFramer(NetworkStream networkStream)
     public void AdvanceTo(SequencePosition consumed)
     {
         _reader.AdvanceTo(consumed);
+    }
+
+    /// <summary>
+    /// Completes the underlying PipeReader and releases its internal buffers.
+    /// </summary>
+    public async ValueTask DisposeAsync()
+    {
+        await _reader.CompleteAsync();
     }
 }

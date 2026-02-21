@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-
 namespace ComancheProxy.Models;
 
 /// <summary>
@@ -17,10 +15,13 @@ public record VariableMetadata(
 /// </summary>
 public sealed class DataDefinition
 {
+    /// <summary>The SimConnect DefineID this definition corresponds to.</summary>
     public uint DefineId { get; init; }
-    public ConcurrentQueue<VariableMetadata> Variables { get; } = new();
-    
-    // Total size including padding
+
+    /// <summary>Ordered list of variables in this definition. Populated during setup, iterated on the hot path.</summary>
+    public List<VariableMetadata> Variables { get; } = [];
+
+    /// <summary>Total size including padding.</summary>
     public uint TotalSize { get; set; }
 }
 

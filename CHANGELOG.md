@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.5] - 2026-02-21
+
+### Fixed
+- PipeReader leak: `SimConnectFramer` now implements `IAsyncDisposable` and completes the reader on disposal — buffers no longer accumulate across reconnections
+- CancellationTokenSource leak: `ProxyBridge` now disposes `_cts` in the `finally` block
+- Unobserved Task exception: after `WhenAny`, both pump tasks are now observed via `WhenAll` to prevent process crash from `TaskScheduler.UnobservedTaskException`
+- Hot-path allocation: moved `string.Trim()` from `TransformationEngine.NormalizePayload` (called at ~60 Hz) to one-time storage in `StateTracker.AddVariableToDefinition`
+- `IsComancheMode` thread visibility: backed by `volatile` field for correct cross-thread reads
+
+### Changed
+- `DataDefinition.Variables` changed from `ConcurrentQueue<VariableMetadata>` to `List<VariableMetadata>` — eliminates unnecessary thread-safety overhead on the hot-path iteration in `NormalizePayload`
+
 ## [0.1.4] - 2026-02-21
 
 ### Added

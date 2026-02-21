@@ -28,7 +28,7 @@ public sealed class TransformationEngine(SidecarInjector sidecarInjector)
         foreach (var variable in definition.Variables)
         {
             int currentOffset = (int)variable.Offset;
-            string varName = variable.Name.Trim();
+            string varName = variable.Name;
 
             // Recenter elevator trim: symmetric linear scaling around -0.36
             if (varName == "ELEVATOR TRIM PCT"

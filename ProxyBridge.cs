@@ -36,8 +36,8 @@ public sealed class ProxyBridge(
         var upstreamStream = clientSocket.GetStream();
         var downstreamStream = simSocket.GetStream();
 
-        var upstreamFramer = new SimConnectFramer(upstreamStream);
-        var downstreamFramer = new SimConnectFramer(downstreamStream);
+        await using var upstreamFramer = new SimConnectFramer(upstreamStream);
+        await using var downstreamFramer = new SimConnectFramer(downstreamStream);
 
         var taskUp = PumpUpstreamToDownstreamAsync(upstreamFramer, downstreamStream, ct);
         var taskDown = PumpDownstreamToUpstreamAsync(downstreamFramer, downstreamStream, upstreamStream, ct);
@@ -54,6 +54,12 @@ public sealed class ProxyBridge(
             {
                 logger.LogBridgeStopped($"{side} connection closed.");
             }
+
+            // Cancel the other pump, then observe both tasks to prevent unobserved exceptions
+            _cts.Cancel();
+            try { await Task.WhenAll(taskUp, taskDown); }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { logger.LogError($"Pump cleanup error: {ex.Message}"); }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -63,6 +69,7 @@ public sealed class ProxyBridge(
         finally
         {
             _cts.Cancel();
+            _cts.Dispose();
             _downstreamWriteLock.Dispose();
         }
     }

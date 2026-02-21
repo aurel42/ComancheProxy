@@ -29,8 +29,10 @@ public enum SendId : uint
     UnsubscribeFromSystemEvent = 5,
     MapClientEventToSimEvent = 8,
     TransmitClientEvent = 9,
-    AddToDataDefinition = 11,
-    RequestDataOnSimObject = 12,
+    SetSystemEventState = 10, // Inferred from gaps or standard
+    AddToDataDefinition = 12, // CONFIRMED by hex analysis (0x0C)
+    RequestDataOnSimObject = 14, // CONFIRMED by hex analysis (0x0E)
+    // 11 and 13 are missing/unknown based on log analysis
 }
 
 public enum SimConnectDataType : uint

@@ -93,3 +93,4 @@ Apply 64-bit alignment guards, refactor for zero-allocation performance, and imp
 | **Engine RPM** | `GENERAL ENG RPM:1` | `L:Eng1_RPM` | Float64 |
 | **Airspeed** | `AIRSPEED INDICATED` | `L:AirspeedIndicated` | Float64 |
 | **AP State** | `AUTOPILOT MASTER` | `L:ApMaster` | Int32 (0/1) |
+| **Prop Thrust** | `PROPELLER THRUST:1` | `L:Eng1_Thrust` | Float64 |

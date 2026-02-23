@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Net.Sockets;
+using System.Text;
 using ComancheProxy.Tcp;
 using ComancheProxy.Redirection;
 using Microsoft.Extensions.Logging;
@@ -17,7 +18,8 @@ public sealed class ProxyBridge(
     ProxyLogger logger,
     StateTracker stateTracker,
     TransformationEngine transformationEngine,
-    SidecarInjector sidecarInjector)
+    SidecarInjector sidecarInjector,
+    ComancheProxy.Models.ProxyConfig config)
 {
     private readonly CancellationTokenSource _cts = new();
     private readonly SemaphoreSlim _downstreamWriteLock = new(1, 1);
@@ -268,22 +270,36 @@ public sealed class ProxyBridge(
             // Zero-allocation scan (Rule 1)
             if (ContainsAsciiCaseInsensitive(buffer, "aircraft.cfg"u8))
             {
-                bool isComanche = ContainsAsciiCaseInsensitive(buffer, "pa24-250"u8);
-
-                if (isComanche != stateTracker.IsComancheMode)
+                ComancheProxy.Models.AircraftProfile? matchedProfile = null;
+                foreach (var profile in config.AircraftProfiles)
                 {
-                    stateTracker.IsComancheMode = isComanche;
-                    logger.LogInfo(isComanche
-                        ? "Comanche detected via aircraft.cfg path. Enabling transformations."
-                        : "Non-Comanche aircraft detected. Disabling transformations.");
+                    if (ContainsAsciiCaseInsensitive(buffer, profile.MatchPatternBytes))
+                    {
+                        matchedProfile = profile;
+                        break;
+                    }
                 }
 
-                // Inject sidecar if Comanche is active but not yet injected on this connection
-                if (isComanche && !_sidecarInjected && _capturedDwVersion != 0)
+                if (matchedProfile != stateTracker.ActiveProfile)
+                {
+                    stateTracker.ActiveProfile = matchedProfile;
+                    if (matchedProfile != null)
+                    {
+                        logger.LogInfo($"Aircraft detected: {matchedProfile.Name}. Enabling transformations.");
+                    }
+                    else
+                    {
+                        logger.LogInfo("Non-matching aircraft detected. Disabling transformations.");
+                    }
+                }
+
+                // Inject sidecar if a profile is active but not yet injected on this connection
+                bool isAnyProfileActive = matchedProfile != null;
+                if (isAnyProfileActive && !_sidecarInjected && _capturedDwVersion != 0)
                 {
                     sidecarAction = SidecarAction.Inject;
                 }
-                else if (!isComanche && _sidecarInjected)
+                else if (!isAnyProfileActive && _sidecarInjected)
                 {
                     sidecarAction = SidecarAction.Cleanup;
                 }
@@ -332,10 +348,10 @@ public sealed class ProxyBridge(
                 // Normal client data — apply overrides
                 var definition = stateTracker.GetDefinitionForRequest(requestId);
 
-                if (definition != null && stateTracker.IsComancheMode)
+                if (definition != null && stateTracker.ActiveProfile != null)
                 {
                     transformationEngine.NormalizePayload(
-                        buffer.Slice(40), definition, stateTracker.IsComancheMode);
+                        buffer.Slice(40), definition);
                 }
             }
         }
@@ -348,9 +364,15 @@ public sealed class ProxyBridge(
     /// </summary>
     private async ValueTask InjectSidecarAsync(NetworkStream downstreamStream, CancellationToken ct)
     {
-        if (_sidecarInjected) return;
+        if (_sidecarInjected || stateTracker.ActiveProfile == null) return;
 
-        byte[] packets = sidecarInjector.BuildInjectionPackets(_capturedDwVersion);
+        byte[]? packets = sidecarInjector.BuildInjectionPackets(_capturedDwVersion, stateTracker.ActiveProfile);
+
+        if (packets == null)
+        {
+            _sidecarInjected = true; // Mark as "injected" (or rather, "handled") so we don't try again
+            return;
+        }
 
         await _downstreamWriteLock.WaitAsync(ct);
         try

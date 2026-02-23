@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.7] - 2026-02-23
+
+### Added
+- Feature-based aircraft profile system: Introduced `config.json` to define aircraft-specific transformations and feature flags
+- Support for SimWorks Studios Quest Kodiak: Added a pre-configured profile with custom trim recentering
+- Customizable trim recentering: Trim center values are now configurable per-aircraft to support varying control offsets
+
+### Changed
+- Decoupled redirection logic: Transformation components now dynamically adapt to the active aircraft profile instead of being hardcoded to the Comanche
+- Optimized sidecar traffic: Sidecar subscriptions are now skipped for aircraft profiles that do not require additional L-Var data
+
 ## [0.1.6] - 2026-02-21
 
 ### Changed

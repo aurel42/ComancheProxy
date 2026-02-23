@@ -1,14 +1,13 @@
 using System.Buffers.Binary;
 using System.Text;
 using ComancheProxy.Protocol;
+using ComancheProxy.Models;
 
 namespace ComancheProxy.Redirection;
 
 /// <summary>
 /// Injects sidecar L-Var subscriptions into the SimConnect TCP connection and
-/// provides override values for client-facing variables. The A2A Comanche exposes
-/// AP axis control through ApDisableAileron/ApDisableElevator L-Vars (>0.5 = AP active),
-/// and engine data through dedicated L-Vars for RPM and thrust.
+/// provides override values for client-facing variables based on aircraft features.
 /// </summary>
 public sealed class SidecarInjector
 {
@@ -22,17 +21,13 @@ public sealed class SidecarInjector
     /// </summary>
     public const uint SidecarRequestId = 0xFFFE0000;
 
-    private static readonly string[] SidecarLVars =
-    [
-        "L:ApDisableAileron",
-        "L:ApDisableElevator",
-        "L:Eng1_Thrust"
-    ];
+    private readonly List<string> _activeLVars = new();
+    private readonly Dictionary<string, double> _lVarValues = new();
 
-    private readonly double[] _values = new double[3];
+    private AircraftProfile? _activeProfile;
 
     /// <summary>
-    /// Thread-safe aggregate autopilot state. True when either ApDisableAileron or ApDisableElevator is >0.5.
+    /// Thread-safe aggregate autopilot state.
     /// </summary>
     public volatile bool IsAutopilotActive;
 
@@ -42,48 +37,75 @@ public sealed class SidecarInjector
     public void Reset()
     {
         IsAutopilotActive = false;
-        Array.Clear(_values);
+        _activeLVars.Clear();
+        _lVarValues.Clear();
+        _activeProfile = null;
     }
 
     /// <summary>
     /// Attempts to get an override value for a client-facing SimConnect variable.
     /// </summary>
-    /// <param name="simVarName">The original SimConnect variable name (trimmed).</param>
-    /// <param name="value">The override value if available.</param>
-    /// <returns>True if an override exists for this variable.</returns>
     public bool TryGetOverrideValue(string simVarName, out double value)
     {
-        if (simVarName.Equals("AUTOPILOT MASTER", StringComparison.OrdinalIgnoreCase))
+        value = 0.0;
+        if (_activeProfile == null) return false;
+
+        var features = _activeProfile.Features;
+
+        if (features.Autopilot.Enabled && simVarName.Equals("AUTOPILOT MASTER", StringComparison.OrdinalIgnoreCase))
         {
             value = IsAutopilotActive ? 1.0 : 0.0;
             return true;
         }
 
-        if (simVarName.Equals("PROP THRUST:1", StringComparison.OrdinalIgnoreCase))
+        if (features.PropellerThrust.Enabled && simVarName.Equals("PROP THRUST:1", StringComparison.OrdinalIgnoreCase))
         {
-            value = _values[2];
-            return true;
+            if (_lVarValues.TryGetValue(features.PropellerThrust.SourceLVar, out double thrust))
+            {
+                value = thrust;
+                return true;
+            }
         }
 
-        value = 0.0;
         return false;
     }
 
     /// <summary>
-    /// Builds the injection payload: 4 AddToDataDefinition packets + 1 RequestDataOnSimObject.
+    /// Builds the injection payload for the given profile.
+    /// Returns null if no L-Vars are required.
     /// </summary>
-    /// <param name="dwVersion">The protocol version captured from the client's first packet.</param>
-    /// <returns>Concatenated binary packets ready to write to the MSFS stream.</returns>
-    public byte[] BuildInjectionPackets(uint dwVersion)
+    public byte[]? BuildInjectionPackets(uint dwVersion, AircraftProfile profile)
     {
+        _activeProfile = profile;
+        _activeLVars.Clear();
+
+        if (profile.Features.Autopilot.Enabled)
+        {
+            foreach (var lvar in profile.Features.Autopilot.SourceLVars)
+            {
+                if (!_activeLVars.Contains(lvar)) _activeLVars.Add(lvar);
+            }
+        }
+
+        if (profile.Features.PropellerThrust.Enabled)
+        {
+            string lvar = profile.Features.PropellerThrust.SourceLVar;
+            if (!string.IsNullOrEmpty(lvar) && !_activeLVars.Contains(lvar))
+            {
+                _activeLVars.Add(lvar);
+            }
+        }
+
+        if (_activeLVars.Count == 0) return null;
+
         const int addPacketSize = 544;
         const int reqPacketSize = 48;
-        int totalSize = (SidecarLVars.Length * addPacketSize) + reqPacketSize;
+        int totalSize = (_activeLVars.Count * addPacketSize) + reqPacketSize;
 
         byte[] buffer = new byte[totalSize];
         int offset = 0;
 
-        foreach (string varName in SidecarLVars)
+        foreach (string varName in _activeLVars)
         {
             WriteAddToDataDefinition(buffer.AsSpan(offset, addPacketSize), dwVersion, varName);
             offset += addPacketSize;
@@ -97,8 +119,6 @@ public sealed class SidecarInjector
     /// <summary>
     /// Builds a ClearDataDefinition packet to unsubscribe the sidecar definition.
     /// </summary>
-    /// <param name="dwVersion">The protocol version captured from the client's first packet.</param>
-    /// <returns>Binary packet ready to write to the MSFS stream.</returns>
     public byte[] BuildCleanupPacket(uint dwVersion)
     {
         byte[] buffer = new byte[20];
@@ -107,7 +127,6 @@ public sealed class SidecarInjector
         BinaryPrimitives.WriteUInt32LittleEndian(span, 20);                                     // dwSize
         BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(4), dwVersion);                     // dwVersion
         BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(8), Protocol.SendId.ClearDataDefinition.Wire());
-        // Offset 12: dwSendID (sequence) — left as 0
         BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(16), SidecarDefineId);              // DefineID
 
         return buffer;
@@ -120,27 +139,30 @@ public sealed class SidecarInjector
 
     /// <summary>
     /// Processes a RECV_SIMOBJECT_DATA payload from our sidecar subscription.
-    /// Reads 3 FLOAT64 values: ApDisableAileron + ApDisableElevator + Eng1_Thrust.
-    /// Derives aggregate AP state from the first 2 (either >0.5 means AP controls that axis).
     /// </summary>
-    /// <param name="dataBlock">The data payload starting after the 40-byte RECV_SIMOBJECT_DATA header.</param>
-    /// <returns>True if autopilot state changed.</returns>
     public bool ProcessResponse(ReadOnlySpan<byte> dataBlock)
     {
-        bool anyApActive = false;
+        if (_activeProfile == null) return false;
 
-        for (int i = 0; i < SidecarLVars.Length; i++)
+        for (int i = 0; i < _activeLVars.Count; i++)
         {
             int varOffset = i * 8;
             if (dataBlock.Length >= varOffset + 8)
             {
                 double val = BinaryPrimitives.ReadDoubleLittleEndian(dataBlock.Slice(varOffset, 8));
-                _values[i] = val;
+                _lVarValues[_activeLVars[i]] = val;
+            }
+        }
 
-                // First 2 are AP axis-disable flags — OR them for aggregate state
-                if (i < 2 && val > 0.5)
+        bool anyApActive = false;
+        if (_activeProfile.Features.Autopilot.Enabled)
+        {
+            foreach (var lvar in _activeProfile.Features.Autopilot.SourceLVars)
+            {
+                if (_lVarValues.TryGetValue(lvar, out double val) && val > 0.5)
                 {
                     anyApActive = true;
+                    break;
                 }
             }
         }
@@ -150,17 +172,12 @@ public sealed class SidecarInjector
         return previousState != anyApActive;
     }
 
-    /// <summary>
-    /// Writes a single AddToDataDefinition packet for an L-Var.
-    /// </summary>
     private static void WriteAddToDataDefinition(Span<byte> packet, uint dwVersion, string varName)
     {
         packet.Clear();
-
         BinaryPrimitives.WriteUInt32LittleEndian(packet, 544);                                           // dwSize
         BinaryPrimitives.WriteUInt32LittleEndian(packet.Slice(4), dwVersion);                            // dwVersion
         BinaryPrimitives.WriteUInt32LittleEndian(packet.Slice(8), Protocol.SendId.AddToDataDefinition.Wire());
-        // Offset 12: dwSendID (sequence) — left as 0
         BinaryPrimitives.WriteUInt32LittleEndian(packet.Slice(16), SidecarDefineId);                     // DefineID
 
         Encoding.ASCII.GetBytes(varName, packet.Slice(20, 256));
@@ -170,17 +187,12 @@ public sealed class SidecarInjector
         BinaryPrimitives.WriteUInt32LittleEndian(packet.Slice(540), 0xFFFFFFFF);                         // DatumID
     }
 
-    /// <summary>
-    /// Writes a RequestDataOnSimObject packet for the sidecar definition.
-    /// </summary>
     private static void WriteRequestDataOnSimObject(Span<byte> packet, uint dwVersion)
     {
         packet.Clear();
-
         BinaryPrimitives.WriteUInt32LittleEndian(packet, 48);                                                  // dwSize
         BinaryPrimitives.WriteUInt32LittleEndian(packet.Slice(4), dwVersion);                                  // dwVersion
         BinaryPrimitives.WriteUInt32LittleEndian(packet.Slice(8), Protocol.SendId.RequestDataOnSimObject.Wire());
-        // Offset 12: dwSendID (sequence) — left as 0
         BinaryPrimitives.WriteUInt32LittleEndian(packet.Slice(16), SidecarRequestId);                          // RequestID
         BinaryPrimitives.WriteUInt32LittleEndian(packet.Slice(20), SidecarDefineId);                           // DefineID
         BinaryPrimitives.WriteUInt32LittleEndian(packet.Slice(24), 0);                                         // ObjectID = user aircraft

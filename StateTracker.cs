@@ -12,15 +12,15 @@ public sealed class StateTracker(ProxyLogger logger)
     private readonly ConcurrentDictionary<uint, uint> _requestToDefinition = new();
     private readonly ConcurrentDictionary<uint, string> _eventMappings = new();
 
-    private volatile bool _isComancheMode;
+    private volatile AircraftProfile? _activeProfile;
 
     /// <summary>
-    /// Whether the A2A Comanche aircraft is currently active. Volatile for cross-thread visibility.
+    /// The currently active aircraft profile, if any.
     /// </summary>
-    public bool IsComancheMode
+    public AircraftProfile? ActiveProfile
     {
-        get => _isComancheMode;
-        set => _isComancheMode = value;
+        get => _activeProfile;
+        set => _activeProfile = value;
     }
 
     /// <summary>
@@ -32,7 +32,7 @@ public sealed class StateTracker(ProxyLogger logger)
         _definitions.Clear();
         _requestToDefinition.Clear();
         _eventMappings.Clear();
-        IsComancheMode = false;
+        ActiveProfile = null;
     }
 
     /// <summary>

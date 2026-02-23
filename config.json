@@ -1,0 +1,41 @@
+{
+  "AircraftProfiles": [
+    {
+      "Name": "A2A Comanche 250",
+      "MatchPattern": "pa24-250",
+      "Features": {
+        "Trim": {
+          "Enabled": true,
+          "CenterValue": -0.36
+        },
+        "Autopilot": {
+          "Enabled": true,
+          "SourceLVars": [
+            "L:ApDisableAileron",
+            "L:ApDisableElevator"
+          ]
+        },
+        "PropellerThrust": {
+          "Enabled": true,
+          "SourceLVar": "L:Eng1_Thrust"
+        }
+      }
+    },
+    {
+      "Name": "SimWorks Studios Quest Kodiak",
+      "MatchPattern": "SWS_Kodiak",
+      "Features": {
+        "Trim": {
+          "Enabled": true,
+          "CenterValue": -0.10
+        },
+        "Autopilot": {
+          "Enabled": false
+        },
+        "PropellerThrust": {
+          "Enabled": false
+        }
+      }
+    }
+  ]
+}

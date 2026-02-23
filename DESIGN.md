@@ -1,10 +1,15 @@
 # ComancheProxy — Design Document
 
-This document describes the implemented architecture of ComancheProxy v0.1.6, a transparent TCP Man-in-the-Middle proxy for MSFS SimConnect.
+This document describes the implemented architecture of ComancheProxy v0.1.7, a transparent TCP Man-in-the-Middle proxy for MSFS SimConnect.
 
 ## 1. Purpose
 
-ComancheProxy sits between a SimConnect client (CLS2Sim force-feedback software) and the MSFS SimConnect server. In its default state, it is a transparent byte-for-byte relay. When the A2A Comanche aircraft is detected, the proxy enters **redirection mode** — injecting sidecar L-Var subscriptions into the MSFS stream and overwriting client-facing data responses with high-fidelity values the client never explicitly requested.
+ComancheProxy sits between a SimConnect client (CLS2Sim force-feedback software) and the MSFS SimConnect server. In its default state, it is a transparent byte-for-byte relay. When a configured aircraft is detected (matched by `aircraft.cfg` path pattern), the proxy activates the aircraft's **feature profile** — optionally injecting sidecar L-Var subscriptions into the MSFS stream and/or applying in-place data transformations to client-facing responses.
+
+Aircraft profiles and their features are defined in `config.json`. Each profile can independently enable:
+- **Trim recentering** — shifts the elevator trim zero-point to a configured center value
+- **Autopilot override** — derives AP state from aircraft-specific L-Vars
+- **Propeller thrust override** — substitutes engine thrust from an aircraft-specific L-Var
 
 The client is unaware of the proxy's presence.
 
@@ -40,16 +45,18 @@ Program.cs                        Top-level entry point, DI, accept loop
 ProxyBridge.cs                    Bidirectional TCP relay + packet inspection
 StateTracker.cs                   Thread-safe definition/request/event state
 ProxyLogger.cs                    [LoggerMessage] source-generated logger
+config.json                       Aircraft profiles and feature configuration
 Tcp/
   SimConnectFramer.cs             PipeReader-based binary framing
 Protocol/
   SimConnectConstants.cs          RecvId, SendId, SimConnectDataType enums
   SimConnectParser.cs             Zero-allocation binary parsing helpers
 Redirection/
-  SidecarInjector.cs              L-Var packet injection + override values
+  SidecarInjector.cs              Profile-driven L-Var injection + override values
   TransformationEngine.cs         In-place payload patching (overrides + trim)
   VariableMapper.cs               (empty — reserved for future mappings)
 Models/
+  ProxyConfig.cs                  ProxyConfig, AircraftProfile, feature config classes
   StateTrackingModels.cs          VariableMetadata, DataDefinition, RequestMetadata
 Logging/
   FileLoggerProvider.cs           NativeAOT-compatible file logger
@@ -57,7 +64,7 @@ Logging/
 
 ### Component Responsibilities
 
-**Program.cs** — Configures DI and logging, creates a `TcpListener` on port 5001, and runs the accept loop. Each accepted client triggers a `StateTracker.Reset()` + `SidecarInjector.Reset()` to clear stale state, then a new `ProxyBridge.RunAsync()` session.
+**Program.cs** — Loads `config.json` into a `ProxyConfig` singleton, configures DI (registers `ProxyLogger`, `StateTracker`, `SidecarInjector`, `TransformationEngine`), creates a `TcpListener` on port 5001, and runs the accept loop. Each accepted client triggers a `StateTracker.Reset()` + `SidecarInjector.Reset()` to clear stale state, then a new `ProxyBridge.RunAsync()` session.
 
 **ProxyBridge** — Owns the bridge lifecycle. Creates two `SimConnectFramer` instances (one per direction) via `await using` for deterministic disposal. Launches two concurrent pump tasks:
 - **Upstream pump** (`PumpUpstreamToDownstreamAsync`): reads client packets, calls `InspectClientPacket` to record definitions/requests, forwards to sim. A `SemaphoreSlim` serializes writes to the downstream socket (shared with sidecar injection).
@@ -72,13 +79,13 @@ After `Task.WhenAny` completes, the bridge cancels the remaining pump via `Cance
 - `_requestToDefinition`: maps `RequestID` → `DefineID`
 - `_eventMappings`: maps client event IDs to sim event names
 
-Variable names and units are trimmed once at storage time (`AddVariableToDefinition`). `IsComancheMode` uses a `volatile` backing field for cross-thread visibility between the upstream and downstream pump threads.
+Variable names and units are trimmed once at storage time (`AddVariableToDefinition`). `ActiveProfile` uses a `volatile` backing field for cross-thread visibility between the upstream and downstream pump threads.
 
-**SidecarInjector** — Manages the proxy's own L-Var subscriptions. When the Comanche is detected, it builds and injects `AddToDataDefinition` packets for 3 L-Vars (`L:ApDisableAileron`, `L:ApDisableElevator`, `L:Eng1_Thrust`) plus a `RequestDataOnSimObject` packet, all using a high DefineID/RequestID (`0xFFFE0000`) to avoid collision with client-assigned IDs. Sidecar responses are intercepted, decoded, and dropped before reaching the client. Provides override values to `TransformationEngine` via `TryGetOverrideValue`.
+**SidecarInjector** — Manages the proxy's own L-Var subscriptions. When a configured aircraft is detected, it builds the L-Var list from the active profile's enabled features (autopilot source L-Vars + propeller thrust L-Var) and injects `AddToDataDefinition` + `RequestDataOnSimObject` packets using a high DefineID/RequestID (`0xFFFE0000`) to avoid collision with client-assigned IDs. Returns `null` when no L-Vars are needed (trim-only profiles), skipping injection entirely. Sidecar responses are intercepted, decoded, and dropped before reaching the client. Provides override values to `TransformationEngine` via `TryGetOverrideValue`, gated by each feature's `Enabled` flag.
 
-**TransformationEngine** — Called on every `RECV_SIMOBJECT_DATA` response when Comanche mode is active. Iterates each variable in the data definition and:
-1. Applies elevator trim recentering: symmetric linear scaling from raw center -0.36 to 0.0, clamped to [-1, +1].
-2. Applies sidecar overrides: writes `AUTOPILOT MASTER` and `PROP THRUST:1` values in the variable's native format (Int32/Float32/Float64) via `BinaryPrimitives`.
+**TransformationEngine** — Called on every `RECV_SIMOBJECT_DATA` response when an aircraft profile is active. Reads the active profile from `StateTracker` and iterates each variable in the data definition:
+1. If trim is enabled: applies elevator trim recentering using the profile's `CenterValue`, with half-range `1.0 - |center|`, clamped to [-1, +1].
+2. Applies sidecar overrides (if any): writes override values in the variable's native format (Int32/Float32/Float64) via `BinaryPrimitives`.
 
 **ProxyLogger** — All log methods use `[LoggerMessage]` source generators for zero-allocation logging. High-frequency Debug/Trace calls are gated behind `IsEnabled(LogLevel.Debug)`. A `FileLoggerProvider` writes Debug-level output to `logs/comanche-proxy.log` when `--debug` is passed.
 
@@ -117,7 +124,7 @@ Packets are length-prefixed: `dwSize` (first 4 bytes) is the total packet length
 | C→S       | `TransmitClientEvent` (9)     | Log event ID + data at Debug level                              |
 | C→S       | `SetDataOnSimObject` (16)     | Log definition summary at Debug level                           |
 | S→C       | `SimobjectData` (8/9)         | Patch payload with sidecar overrides + trim recentering         |
-| S→C       | RecvId 5, 8, 15               | Scan for `aircraft.cfg` + `pa24-250` for Comanche detection     |
+| S→C       | RecvId 5, 8, 15               | Scan for `aircraft.cfg` + config match patterns for aircraft detection |
 | S→C       | `Exception` (1)               | Log exception code, SendID, and index                           |
 
 ## 6. Transformation Sequence
@@ -131,22 +138,23 @@ Packets are length-prefixed: `dwSize` (first 4 bytes) is the total packet length
 
 3. Sim sends RECV_SIMOBJECT_DATA(RequestID=100, payload=[...])
    → ProxyBridge looks up DefineID 1 via RequestID 100
-   → TransformationEngine iterates variables:
-     a. ELEVATOR TRIM PCT → recenter from -0.36 center point
-     b. AUTOPILOT MASTER  → overwrite with sidecar aggregate (0.0 or 1.0)
-     c. PROP THRUST:1     → overwrite with L:Eng1_Thrust sidecar value
+   → TransformationEngine reads ActiveProfile, iterates variables:
+     a. ELEVATOR TRIM PCT → if Trim.Enabled: recenter from profile's CenterValue
+     b. AUTOPILOT MASTER  → if Autopilot.Enabled: overwrite with sidecar aggregate
+     c. PROP THRUST:1     → if PropellerThrust.Enabled: overwrite with sidecar value
    → Patched buffer forwarded to client
 ```
 
 ## 7. Sidecar Injection Lifecycle
 
 ```
- [Comanche detected]
+ [Configured aircraft detected]
         │
         ▼
- SidecarInjector.BuildInjectionPackets(dwVersion)
-   → 3 × AddToDataDefinition (DefineID=0xFFFE0000, Float64)
-       L:ApDisableAileron, L:ApDisableElevator, L:Eng1_Thrust
+ SidecarInjector.BuildInjectionPackets(dwVersion, profile)
+   → Collects L-Vars from enabled features (AP source vars + thrust var)
+   → If no L-Vars needed (trim-only profile): returns null → skip injection
+   → N × AddToDataDefinition (DefineID=0xFFFE0000, Float64)
    → 1 × RequestDataOnSimObject (RequestID=0xFFFE0000, Period=VISUAL_FRAME)
         │
         ▼
@@ -155,12 +163,12 @@ Packets are length-prefixed: `dwSize` (first 4 bytes) is the total packet length
         ▼
  [Every VISUAL_FRAME tick]
    Sim sends RECV_SIMOBJECT_DATA(RequestID=0xFFFE0000)
-   → SidecarInjector.ProcessResponse() decodes 3 Float64 values
-   → Derives AP state: either ApDisableAileron or ApDisableElevator > 0.5
+   → SidecarInjector.ProcessResponse() decodes N Float64 values by L-Var name
+   → Derives AP state: any autopilot source L-Var > 0.5
    → Packet dropped (never reaches client)
         │
         ▼
- [Non-Comanche aircraft detected]
+ [Non-configured aircraft detected]
    SidecarInjector.BuildCleanupPacket(dwVersion)
    → ClearDataDefinition(DefineID=0xFFFE0000)
 ```
@@ -169,9 +177,11 @@ Packets are length-prefixed: `dwSize` (first 4 bytes) is the total packet length
 
 Zero-allocation binary scan — no string conversion. `InspectSimPacket` checks RecvId 5 (`EventObjectAddremove`), 8 (`SimobjectData`), and 15 (`SystemState`) for:
 1. The ASCII subsequence `aircraft.cfg` (case-insensitive)
-2. If found, the ASCII subsequence `pa24-250` (case-insensitive)
+2. If found, iterates `config.AircraftProfiles` and tests each profile's pre-cached `MatchPatternBytes` (case-insensitive)
 
-This fires on aircraft load/change packets. On transition, `StateTracker.IsComancheMode` is set and sidecar injection/cleanup is triggered.
+Match-pattern byte arrays are lazily cached on each `AircraftProfile` via `MatchPatternBytes` to avoid per-packet allocation.
+
+This fires on aircraft load/change packets. On match/transition, `StateTracker.ActiveProfile` is set to the matched profile (or `null`) and sidecar injection/cleanup is triggered.
 
 ## 9. Session Lifecycle
 
@@ -210,16 +220,41 @@ CLS2Sim polls at ~60 Hz. GC pauses are perceptible as force-feedback hitches.
 | No boxing | Generics with `where T : struct` for transformation math |
 | Source-generated logging | `[LoggerMessage]` on all methods; Debug calls gated behind `IsEnabled` |
 | Deterministic resource cleanup | `SimConnectFramer` implements `IAsyncDisposable`; `CancellationTokenSource` disposed after cancel |
-| Thread safety | `ConcurrentDictionary` for state; `volatile` backing field for `IsComancheMode`; `SemaphoreSlim` for downstream write serialization |
+| Thread safety | `ConcurrentDictionary` for state; `volatile` backing field for `ActiveProfile`; `SemaphoreSlim` for downstream write serialization |
 | List over ConcurrentQueue | `DataDefinition.Variables` uses `List<T>` — populated during setup, iterated on every packet at 60 Hz |
 
-## 11. Variable Override Mappings
+## 11. Configuration
 
-| Client Variable        | Override Source                                   | Method           |
-|------------------------|---------------------------------------------------|------------------|
-| `AUTOPILOT MASTER`     | `L:ApDisableAileron` OR `L:ApDisableElevator` > 0.5 → 1.0 | Sidecar override |
-| `PROP THRUST:1`        | `L:Eng1_Thrust`                                   | Sidecar override |
-| `ELEVATOR TRIM PCT`    | Raw value recentered: `(raw − (−0.36)) / 0.64`, clamped [-1, +1] | In-place transform |
+Aircraft profiles are defined in `config.json` (copied to the output directory at build time). Each profile contains:
+
+```json
+{
+  "Name": "Human-readable name (logging only)",
+  "MatchPattern": "Case-insensitive substring matched against aircraft.cfg path",
+  "Features": {
+    "Trim":             { "Enabled": bool, "CenterValue": float },
+    "Autopilot":        { "Enabled": bool, "SourceLVars": ["L:VarName", ...] },
+    "PropellerThrust":  { "Enabled": bool, "SourceLVar": "L:VarName" }
+  }
+}
+```
+
+A profile may enable any combination of features. Trim-only profiles (no AP, no thrust) skip sidecar injection entirely — no L-Var packets are sent to MSFS.
+
+### Default Profiles
+
+| Aircraft | Pattern | Trim | AP | Thrust |
+|----------|---------|------|----|--------|
+| A2A Comanche 250 | `pa24-250` | center −0.36 | `L:ApDisableAileron`, `L:ApDisableElevator` | `L:Eng1_Thrust` |
+| SWS Quest Kodiak | `SWS_Kodiak` | center −0.10 | — | — |
+
+### Variable Override Mappings (per profile)
+
+| Client Variable        | Override Source                                   | Method           | Feature Gate |
+|------------------------|---------------------------------------------------|------------------|--------------|
+| `AUTOPILOT MASTER`     | Any AP source L-Var > 0.5 → 1.0                  | Sidecar override | `Autopilot.Enabled` |
+| `PROP THRUST:1`        | Configured thrust L-Var value                     | Sidecar override | `PropellerThrust.Enabled` |
+| `ELEVATOR TRIM PCT`    | `(raw − CenterValue) / (1.0 − |CenterValue|)`, clamped [-1, +1] | In-place transform | `Trim.Enabled` |
 
 ## 12. CLI
 

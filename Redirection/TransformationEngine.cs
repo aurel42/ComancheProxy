@@ -8,36 +8,34 @@ namespace ComancheProxy.Redirection;
 /// the A2A Comanche is active. Iterates each variable in the definition and
 /// applies overrides from the SidecarInjector.
 /// </summary>
-public sealed class TransformationEngine(SidecarInjector sidecarInjector)
+public sealed class TransformationEngine(SidecarInjector sidecarInjector, StateTracker stateTracker)
 {
-    /// <summary>The raw ELEVATOR TRIM PCT value that maps to 0.0 for CLS2Sim.</summary>
-    private const float ElevatorTrimCenterPct = -0.36f;
-
-    /// <summary>Symmetric half-range for trim recentering (0.64 both sides of center).</summary>
-    private const float ElevatorTrimHalfRange = 0.64f;
-
     /// <summary>
     /// Applies sidecar overrides and elevator trim recentering to a raw SimConnect data block.
-    /// For each variable in the definition, checks if the SidecarInjector has an
-    /// override value and writes it in the variable's native format.
     /// </summary>
-    public void NormalizePayload(Span<byte> dataBlock, DataDefinition definition, bool isComancheMode)
+    public void NormalizePayload(Span<byte> dataBlock, DataDefinition definition)
     {
-        if (!isComancheMode) return;
+        var profile = stateTracker.ActiveProfile;
+        if (profile == null) return;
 
         foreach (var variable in definition.Variables)
         {
             int currentOffset = (int)variable.Offset;
             string varName = variable.Name;
 
-            // Recenter elevator trim: symmetric linear scaling around -0.36
-            if (varName == "ELEVATOR TRIM PCT"
+            // Recenter elevator trim: symmetric linear scaling around configured center
+            if (profile.Features.Trim.Enabled && varName == "ELEVATOR TRIM PCT"
                 && dataBlock.Length >= currentOffset + (int)variable.Size)
             {
-                float raw = BinaryPrimitives.ReadSingleLittleEndian(dataBlock.Slice(currentOffset, 4));
-                float recentered = Math.Clamp(
-                    (raw - ElevatorTrimCenterPct) / ElevatorTrimHalfRange, -1.0f, 1.0f);
-                BinaryPrimitives.WriteSingleLittleEndian(dataBlock.Slice(currentOffset, 4), recentered);
+                float center = profile.Features.Trim.CenterValue;
+                // Use the distance to the closer edge as the symmetric half-range.
+                float halfRange = 1.0f - Math.Abs(center);
+                if (halfRange > 0)
+                {
+                    float raw = BinaryPrimitives.ReadSingleLittleEndian(dataBlock.Slice(currentOffset, 4));
+                    float recentered = Math.Clamp((raw - center) / halfRange, -1.0f, 1.0f);
+                    BinaryPrimitives.WriteSingleLittleEndian(dataBlock.Slice(currentOffset, 4), recentered);
+                }
             }
 
             if (sidecarInjector.TryGetOverrideValue(varName, out double overrideValue))

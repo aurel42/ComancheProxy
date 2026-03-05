@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using ComancheProxy;
@@ -35,9 +36,9 @@ ProxyConfig config;
 try
 {
     string json = File.ReadAllText(configPath);
-    config = JsonSerializer.Deserialize<ProxyConfig>(json, new JsonSerializerOptions 
-    { 
-        PropertyNameCaseInsensitive = true 
+    config = JsonSerializer.Deserialize<ProxyConfig>(json, new JsonSerializerOptions
+    {
+        PropertyNameCaseInsensitive = true
     }) ?? new ProxyConfig();
 }
 catch (Exception ex)
@@ -46,27 +47,21 @@ catch (Exception ex)
     return;
 }
 services.AddSingleton(config);
-services.AddSingleton<ProxyLogger>(sp => 
+services.AddSingleton<ProxyLogger>(sp =>
 {
     var raw = sp.GetRequiredService<ILogger<ProxyBridge>>();
     return new ProxyLogger(raw);
 });
-services.AddSingleton<StateTracker>();
-services.AddSingleton<SidecarInjector>();
-services.AddSingleton<TransformationEngine>();
 
 var serviceProvider = services.BuildServiceProvider();
 
-// Resolve components from DI
 var logger = serviceProvider.GetRequiredService<ProxyLogger>();
-var stateTracker = serviceProvider.GetRequiredService<StateTracker>();
-var sidecarInjector = serviceProvider.GetRequiredService<SidecarInjector>();
-var transformationEngine = serviceProvider.GetRequiredService<TransformationEngine>();
 var resolvedConfig = serviceProvider.GetRequiredService<ProxyConfig>();
 
-const int listenPort = 5001;
+const int cls2SimPort = 5001;
 const int simPort = 500;
 const string simAddress = "127.0.0.1";
+int fsePort = resolvedConfig.FsePort;
 
 var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => {
@@ -74,39 +69,38 @@ Console.CancelKeyPress += (_, e) => {
     cts.Cancel();
 };
 
-var listener = new TcpListener(IPAddress.Loopback, listenPort);
-listener.Start();
-logger.LogInfo("ComancheProxy v0.1.6");
-logger.LogStarted($"127.0.0.1:{listenPort}");
+logger.LogInfo("ComancheProxy v0.2.0");
+
+// Start CLS2Sim listener
+var cls2SimListener = new TcpListener(IPAddress.Loopback, cls2SimPort);
+cls2SimListener.Start();
+logger.LogStarted($"CLS2Sim on 127.0.0.1:{cls2SimPort}");
+
+// Start FSEconomy listener if configured
+TcpListener? fseListener = null;
+if (fsePort > 0)
+{
+    fseListener = new TcpListener(IPAddress.Loopback, fsePort);
+    fseListener.Start();
+    logger.LogStarted($"FSEconomy on 127.0.0.1:{fsePort}");
+}
+
+var activeBridges = new ConcurrentDictionary<int, Task>();
+int bridgeIdCounter = 0;
 
 try
 {
-    while (!cts.Token.IsCancellationRequested)
+    var acceptTasks = new List<Task>
     {
-        logger.LogWaiting("Waiting for CLS2Sim connection...");
-        using var clientSocket = await listener.AcceptTcpClientAsync(cts.Token);
+        AcceptLoopAsync(cls2SimListener, ClientProfile.CLS2Sim, "CLS2Sim", cts.Token)
+    };
 
-        logger.LogClientConnected(clientSocket.Client.RemoteEndPoint?.ToString() ?? "Unknown");
-
-        try
-        {
-            // Reset shared state so reconnections start clean
-            stateTracker.Reset();
-            sidecarInjector.Reset();
-
-            using var simSocket = new TcpClient();
-            await simSocket.ConnectAsync(simAddress, simPort, cts.Token);
-
-            var bridge = new ProxyBridge(clientSocket, simSocket, logger, stateTracker, transformationEngine, sidecarInjector, resolvedConfig);
-            await bridge.RunAsync(cts.Token);
-        }
-
-
-        catch (Exception ex)
-        {
-            logger.LogError($"Failed to bridge to MSFS: {ex.Message}");
-        }
+    if (fseListener != null)
+    {
+        acceptTasks.Add(AcceptLoopAsync(fseListener, ClientProfile.FSEconomy, "FSEconomy", cts.Token));
     }
+
+    await Task.WhenAll(acceptTasks);
 }
 catch (OperationCanceledException)
 {
@@ -114,6 +108,61 @@ catch (OperationCanceledException)
 }
 finally
 {
-    listener.Stop();
-    logger.LogConnectionLost("Proxy listener stopped.");
+    cls2SimListener.Stop();
+    fseListener?.Stop();
+
+    // Wait for active bridges to finish
+    try { await Task.WhenAll(activeBridges.Values); }
+    catch { /* bridges already logging their own errors */ }
+
+    logger.LogConnectionLost("Proxy listeners stopped.");
+}
+
+async Task AcceptLoopAsync(TcpListener listener, ClientProfile profile, string profileName, CancellationToken ct)
+{
+    while (!ct.IsCancellationRequested)
+    {
+        logger.LogWaiting($"Waiting for {profileName} connection...");
+        TcpClient clientSocket;
+        try
+        {
+            clientSocket = await listener.AcceptTcpClientAsync(ct);
+        }
+        catch (OperationCanceledException) { break; }
+
+        logger.LogClientConnected($"{profileName}: {clientSocket.Client.RemoteEndPoint?.ToString() ?? "Unknown"}");
+
+        int bridgeId = Interlocked.Increment(ref bridgeIdCounter);
+        var bridgeTask = Task.Run(async () =>
+        {
+            using (clientSocket)
+            {
+                try
+                {
+                    using var simSocket = new TcpClient();
+                    await simSocket.ConnectAsync(simAddress, simPort, ct);
+
+                    // Per-connection state instances
+                    var stateTracker = new StateTracker(logger);
+                    var sidecarInjector = new SidecarInjector();
+                    var transformationEngine = new TransformationEngine(sidecarInjector, stateTracker);
+
+                    var bridge = new ProxyBridge(clientSocket, simSocket, logger, stateTracker,
+                        transformationEngine, sidecarInjector, resolvedConfig, profile);
+                    await bridge.RunAsync(ct);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    logger.LogError($"Failed to bridge {profileName} to MSFS: {ex.Message}");
+                }
+                finally
+                {
+                    activeBridges.TryRemove(bridgeId, out _);
+                }
+            }
+        }, ct);
+
+        activeBridges.TryAdd(bridgeId, bridgeTask);
+    }
 }

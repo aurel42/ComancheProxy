@@ -1,4 +1,11 @@
 {
+  "FsePort": 5002,
+  "TitleMappings": [
+    {
+      "Match": "Optica: Passengers",
+      "Replace": "C172"
+    }
+  ],
   "AircraftProfiles": [
     {
       "Name": "A2A Comanche 250",
@@ -27,7 +34,7 @@
       "Features": {
         "Trim": {
           "Enabled": true,
-          "CenterValue": -0.10
+          "CenterValue": -0.06
         },
         "Autopilot": {
           "Enabled": false

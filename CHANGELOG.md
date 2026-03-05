@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.8] - 2026-03-05
+
+### Added
+- Multi-client SimConnect support: Added parallel port listener (default 5002) for FSEconomy or other secondary clients
+- Aircraft title spoofing: Implemented `TitleMappings` system to transform aircraft titles for specific client ports
+- Per-connection state isolation: Isolated state trackers and transformation engines to support concurrent independent sessions
+- Diagnostic Utility: Included `ComancheDiag` project for monitoring SimConnect packet traffic
+
+### Changed
+- Refactored `ProxyBridge` lifecycle to use per-connection state instances
+
 ## [0.1.7] - 2026-02-23
 
 ### Added

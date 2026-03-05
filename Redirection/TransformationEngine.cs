@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Text;
 using ComancheProxy.Models;
 
 namespace ComancheProxy.Redirection;
@@ -56,6 +57,39 @@ public sealed class TransformationEngine(SidecarInjector sidecarInjector, StateT
                     }
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Replaces the TITLE string variable in a data block with a spoofed value
+    /// based on configured partial-match title mappings.
+    /// </summary>
+    public void SpoofTitle(Span<byte> dataBlock, DataDefinition definition, List<TitleMapping> titleMappings)
+    {
+        if (titleMappings.Count == 0) return;
+
+        foreach (var variable in definition.Variables)
+        {
+            if (!variable.Name.Equals("TITLE", StringComparison.OrdinalIgnoreCase)) continue;
+
+            int offset = (int)variable.Offset;
+            int size = (int)variable.Size;
+            if (dataBlock.Length < offset + size) break;
+
+            var fieldSlice = dataBlock.Slice(offset, size);
+            string currentTitle = Protocol.SimConnectParser.ReadString(fieldSlice, size);
+
+            foreach (var mapping in titleMappings)
+            {
+                if (currentTitle.Contains(mapping.Match, StringComparison.OrdinalIgnoreCase))
+                {
+                    fieldSlice.Clear();
+                    Encoding.ASCII.GetBytes(mapping.Replace, fieldSlice);
+                    return;
+                }
+            }
+
+            break;
         }
     }
 }

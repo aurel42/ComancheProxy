@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Net.Sockets;
 using System.Text;
 using ComancheProxy.Tcp;
+using ComancheProxy.Models;
 using ComancheProxy.Redirection;
 using Microsoft.Extensions.Logging;
 
@@ -19,7 +20,8 @@ public sealed class ProxyBridge(
     StateTracker stateTracker,
     TransformationEngine transformationEngine,
     SidecarInjector sidecarInjector,
-    ComancheProxy.Models.ProxyConfig config)
+    ProxyConfig config,
+    ClientProfile clientProfile)
 {
     private readonly CancellationTokenSource _cts = new();
     private readonly SemaphoreSlim _downstreamWriteLock = new(1, 1);
@@ -47,7 +49,8 @@ public sealed class ProxyBridge(
         try
         {
             var completedTask = await Task.WhenAny(taskUp, taskDown);
-            string side = (completedTask == taskUp) ? "Upstream (CLS2Sim)" : "Downstream (MSFS)";
+            string clientName = clientProfile.ToString();
+            string side = (completedTask == taskUp) ? $"Upstream ({clientName})" : "Downstream (MSFS)";
             if (completedTask.IsFaulted)
             {
                 logger.LogError($"{side} pump FAULTED: {completedTask.Exception?.InnerException?.Message}");
@@ -270,7 +273,7 @@ public sealed class ProxyBridge(
             // Zero-allocation scan (Rule 1)
             if (ContainsAsciiCaseInsensitive(buffer, "aircraft.cfg"u8))
             {
-                ComancheProxy.Models.AircraftProfile? matchedProfile = null;
+                AircraftProfile? matchedProfile = null;
                 foreach (var profile in config.AircraftProfiles)
                 {
                     if (ContainsAsciiCaseInsensitive(buffer, profile.MatchPatternBytes))
@@ -293,15 +296,18 @@ public sealed class ProxyBridge(
                     }
                 }
 
-                // Inject sidecar if a profile is active but not yet injected on this connection
-                bool isAnyProfileActive = matchedProfile != null;
-                if (isAnyProfileActive && !_sidecarInjected && _capturedDwVersion != 0)
+                // Sidecar injection only applies to CLS2Sim
+                if (clientProfile == ClientProfile.CLS2Sim)
                 {
-                    sidecarAction = SidecarAction.Inject;
-                }
-                else if (!isAnyProfileActive && _sidecarInjected)
-                {
-                    sidecarAction = SidecarAction.Cleanup;
+                    bool isAnyProfileActive = matchedProfile != null;
+                    if (isAnyProfileActive && !_sidecarInjected && _capturedDwVersion != 0)
+                    {
+                        sidecarAction = SidecarAction.Inject;
+                    }
+                    else if (!isAnyProfileActive && _sidecarInjected)
+                    {
+                        sidecarAction = SidecarAction.Cleanup;
+                    }
                 }
             }
         }
@@ -322,8 +328,8 @@ public sealed class ProxyBridge(
             {
                 uint requestId = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(12));
 
-                // Check if this is our sidecar response
-                if (SidecarInjector.IsSidecarResponse(requestId))
+                // CLS2Sim: check if this is our sidecar response
+                if (clientProfile == ClientProfile.CLS2Sim && SidecarInjector.IsSidecarResponse(requestId))
                 {
                     ReadOnlySpan<byte> dataBlock = buffer.Slice(40);
                     bool stateChanged = sidecarInjector.ProcessResponse(dataBlock);
@@ -345,13 +351,22 @@ public sealed class ProxyBridge(
                     return SidecarAction.Drop;
                 }
 
-                // Normal client data — apply overrides
                 var definition = stateTracker.GetDefinitionForRequest(requestId);
 
-                if (definition != null && stateTracker.ActiveProfile != null)
+                if (definition != null)
                 {
-                    transformationEngine.NormalizePayload(
-                        buffer.Slice(40), definition);
+                    if (clientProfile == ClientProfile.CLS2Sim && stateTracker.ActiveProfile != null)
+                    {
+                        // CLS2Sim: apply sidecar overrides and trim recentering
+                        transformationEngine.NormalizePayload(
+                            buffer.Slice(40), definition);
+                    }
+                    else if (clientProfile == ClientProfile.FSEconomy)
+                    {
+                        // FSEconomy: apply title spoofing
+                        transformationEngine.SpoofTitle(
+                            buffer.Slice(40), definition, config.TitleMappings);
+                    }
                 }
             }
         }

@@ -26,6 +26,7 @@ This workflow guides the release process for PhileasGo, ensuring code quality, v
             - Avoid hyperbolic or marketing language: "professional", "premium", "smart", "intelligent".
             - **Bad**: "Implemented a professional cross-fading system for a premium feel."
             - **Good**: "Added volume fades to audio actions to eliminate clicks."
+3. Stop here and wait for the user to review CHANGELOG.md.
 5.  **Commit**:
     - Commit all changes with a descriptive message.
     ```bash

@@ -5,6 +5,17 @@ namespace ComancheProxy.Models;
 public sealed class ProxyConfig
 {
     public List<AircraftProfile> AircraftProfiles { get; set; } = new();
+    public int FsePort { get; set; }
+    public List<TitleMapping> TitleMappings { get; set; } = new();
+}
+
+/// <summary>
+/// Maps a partial aircraft title match to a replacement string for FSEconomy spoofing.
+/// </summary>
+public sealed class TitleMapping
+{
+    public string Match { get; set; } = string.Empty;
+    public string Replace { get; set; } = string.Empty;
 }
 
 public sealed class AircraftProfile

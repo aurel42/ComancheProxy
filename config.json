@@ -1,11 +1,5 @@
 {
-  "FsePort": 5002,
-  "TitleMappings": [
-    {
-      "Match": "Optica: Passengers",
-      "Replace": "C172"
-    }
-  ],
+  "CLS2SimPort": 15050,
   "AircraftProfiles": [
     {
       "Name": "A2A Comanche 250",
@@ -27,6 +21,13 @@
           "SourceLVar": "L:Eng1_Thrust"
         }
       }
+    }
+  ],
+  "FsePort": 5002,
+  "TitleMappings": [
+    {
+      "Match": "Optica: Passengers",
+      "Replace": "C172"
     }
   ]
 }

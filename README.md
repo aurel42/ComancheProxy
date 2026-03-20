@@ -1,6 +1,6 @@
 # ComancheProxy
 
-ComancheProxy is a technical Man-in-the-Middle (MitM) bridge for MSFS SimConnect, implemented as a bidirectional TCP relay. It facilitates transparent pass-through of SimConnect binary packets while providing real-time redirection and patching for specific aircraft profiles, specifically the A2A Comanche.
+ComancheProxy is a Man-in-the-Middle (MitM) bridge for MSFS SimConnect, implemented as a bidirectional TCP relay. It facilitates transparent pass-through of SimConnect binary packets while providing real-time patching for specific aircraft profiles, specifically the A2A Comanche.
 
 ## Installation
 - Unpack the release archive to a location of your choosing

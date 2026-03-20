@@ -6,6 +6,7 @@ public sealed class ProxyConfig
 {
     public List<AircraftProfile> AircraftProfiles { get; set; } = new();
     public int FsePort { get; set; }
+    public int CLS2SimPort { get; set; } = 5001;
     public List<TitleMapping> TitleMappings { get; set; } = new();
 }
 

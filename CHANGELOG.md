@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.1.10] - 2026-03-20
+- Added `CLS2SimPort` configuration option to allow customizing the default listener port (5001)
+
 ## [0.1.9] - 2026-03-20
 - Added creation of a release archive
 

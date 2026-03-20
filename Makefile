@@ -20,5 +20,5 @@ clean:
 release-binary:
 	mkdir -p release publish-temp
 	dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish-temp
-	powershell -Command "Compress-Archive -Path publish-temp/ComancheProxy.exe,publish-temp/config.json,README.md,CHANGELOG.md -DestinationPath release/ComancheProxy-$(VERSION)-windows-x64.zip -Force"
+	powershell -Command 'for ($$i=1; $$i -le 3; $$i++) { try { Compress-Archive -Path publish-temp/ComancheProxy.exe,publish-temp/config.json,README.md,CHANGELOG.md -DestinationPath release/ComancheProxy-$(VERSION)-windows-x64.zip -Force; break } catch { if ($$i -eq 3) { throw } Start-Sleep -s 1 } }' # Thanks, Bill Gates
 	rm -rf publish-temp

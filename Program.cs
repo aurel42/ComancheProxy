@@ -58,7 +58,7 @@ var serviceProvider = services.BuildServiceProvider();
 var logger = serviceProvider.GetRequiredService<ProxyLogger>();
 var resolvedConfig = serviceProvider.GetRequiredService<ProxyConfig>();
 
-const int cls2SimPort = 5001;
+int cls2SimPort = resolvedConfig.CLS2SimPort;
 const int simPort = 500;
 const string simAddress = "127.0.0.1";
 int fsePort = resolvedConfig.FsePort;
@@ -69,7 +69,7 @@ Console.CancelKeyPress += (_, e) => {
     cts.Cancel();
 };
 
-logger.LogInfo("ComancheProxy v0.2.0");
+logger.LogInfo("ComancheProxy v0.1.10");
 
 // Start CLS2Sim listener
 var cls2SimListener = new TcpListener(IPAddress.Loopback, cls2SimPort);

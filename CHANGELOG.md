@@ -2,7 +2,7 @@
 
 ## [0.1.11] - 2026-03-20
 - Added `MSFSPort` configuration option
-- Implemented automatic MSFS port discovery for enhanced connectivity
+- Implemented automatic MSFS port discovery
 
 ## [0.1.10] - 2026-03-20
 - Added `CLS2SimPort` configuration option to allow customizing the default listener port (5001)

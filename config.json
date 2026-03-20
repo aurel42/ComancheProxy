@@ -1,5 +1,5 @@
 {
-  "MSFSPort": 4711,
+  "MSFSPort": 500,
   "CLS2SimPort": 15050,
   "AircraftProfiles": [
     {

@@ -5,8 +5,6 @@ ComancheProxy is a Man-in-the-Middle (MitM) bridge for MSFS SimConnect, implemen
 ## Installation
 - Unpack the release archive to a location of your choosing
 - Make sure you have the binary (ComancheProxy.exe) and the config file (config.json) in the same directory
-- In your CLS2Sim program folder (defaults to `C:\Program Files (x86)\Brunner Elektronik AG\CLS2Sim`), back up or copy the file `SimConnect.cfg`
-- Edit `SimConnect.cfg` and to change the `Port` value of the first entry (`[SimConnect]`) to `5001`
 
 ## Verification
 - Run MSFS and CLS2Sim: CLS2Sim should continue to connect to the simulator as before, but it should say "Connected to Microsoft Flight Simulator X" now.
@@ -26,12 +24,7 @@ ComancheProxy is a Man-in-the-Middle (MitM) bridge for MSFS SimConnect, implemen
 - If you don't use one or the other, just ignore the config entries (or remove them, up to you).
 
 ## Architecture
-
 The proxy operates between a SimConnect client (such as CLS2Sim) and the MSFS SimConnect server. It executes two asynchronous pump loops to handle upstream (client-facing) and downstream (sim-facing) traffic.
-
-### Connectivity
-- **Client Interface (Upstream):** TCP Listener on `127.0.0.1:5001`.
-- **MSFS Interface (Downstream):** TCP Client connecting to the MSFS SimConnect server.
 
 ## Technical Implementation
 

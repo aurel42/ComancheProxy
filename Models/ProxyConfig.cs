@@ -7,6 +7,10 @@ public sealed class ProxyConfig
     public List<AircraftProfile> AircraftProfiles { get; set; } = new();
     public int FsePort { get; set; }
     public int CLS2SimPort { get; set; } = 5001;
+    /// <summary>
+    /// TCP port for connecting to the MSFS SimConnect server. Falls back to automatic discovery on failure.
+    /// </summary>
+    public int MSFSPort { get; set; } = 500;
     public List<TitleMapping> TitleMappings { get; set; } = new();
 }
 

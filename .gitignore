@@ -1,9 +1,9 @@
 bin/
 obj/
 logs/
+dist/
 .vs/
 .vscode/
-release/
 *.user
 *.suo
 *.userprefs

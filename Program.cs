@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using ComancheProxy.Redirection;
+using ComancheProxy.Tcp;
 
 // Setup Dependency Injection and Logging
 bool debugMode = args.Contains("--debug");
@@ -59,7 +60,6 @@ var logger = serviceProvider.GetRequiredService<ProxyLogger>();
 var resolvedConfig = serviceProvider.GetRequiredService<ProxyConfig>();
 
 int cls2SimPort = resolvedConfig.CLS2SimPort;
-const int simPort = 500;
 const string simAddress = "127.0.0.1";
 int fsePort = resolvedConfig.FsePort;
 
@@ -69,7 +69,7 @@ Console.CancelKeyPress += (_, e) => {
     cts.Cancel();
 };
 
-logger.LogInfo("ComancheProxy v0.1.10");
+logger.LogInfo("ComancheProxy v0.1.11");
 
 // Start CLS2Sim listener
 var cls2SimListener = new TcpListener(IPAddress.Loopback, cls2SimPort);
@@ -139,17 +139,43 @@ async Task AcceptLoopAsync(TcpListener listener, ClientProfile profile, string p
             {
                 try
                 {
-                    using var simSocket = new TcpClient();
-                    await simSocket.ConnectAsync(simAddress, simPort, ct);
+                    TcpClient simSocket = new TcpClient();
+                    try
+                    {
+                        int targetPort = resolvedConfig.MSFSPort;
+                        try
+                        {
+                            await simSocket.ConnectAsync(simAddress, targetPort, ct);
+                        }
+                        catch (SocketException ex)
+                        {
+                            var discoveredPort = SimPortDiscovery.DiscoverPort();
+                            if (discoveredPort.HasValue && discoveredPort.Value != targetPort)
+                            {
+                                logger.LogInfo($"MSFSPort {targetPort} failed ({ex.Message}). Discovered SimConnect on port {discoveredPort.Value}, retrying...");
+                                simSocket.Dispose();
+                                simSocket = new TcpClient();
+                                await simSocket.ConnectAsync(simAddress, discoveredPort.Value, ct);
+                            }
+                            else
+                            {
+                                throw;
+                            }
+                        }
 
-                    // Per-connection state instances
-                    var stateTracker = new StateTracker(logger);
-                    var sidecarInjector = new SidecarInjector();
-                    var transformationEngine = new TransformationEngine(sidecarInjector, stateTracker);
+                        // Per-connection state instances
+                        var stateTracker = new StateTracker(logger);
+                        var sidecarInjector = new SidecarInjector();
+                        var transformationEngine = new TransformationEngine(sidecarInjector, stateTracker);
 
-                    var bridge = new ProxyBridge(clientSocket, simSocket, logger, stateTracker,
-                        transformationEngine, sidecarInjector, resolvedConfig, profile);
-                    await bridge.RunAsync(ct);
+                        var bridge = new ProxyBridge(clientSocket, simSocket, logger, stateTracker,
+                            transformationEngine, sidecarInjector, resolvedConfig, profile);
+                        await bridge.RunAsync(ct);
+                    }
+                    finally
+                    {
+                        simSocket.Dispose();
+                    }
                 }
                 catch (OperationCanceledException) { }
                 catch (Exception ex)

@@ -2,6 +2,29 @@
 
 ComancheProxy is a technical Man-in-the-Middle (MitM) bridge for MSFS SimConnect, implemented as a bidirectional TCP relay. It facilitates transparent pass-through of SimConnect binary packets while providing real-time redirection and patching for specific aircraft profiles, specifically the A2A Comanche.
 
+## Installation
+- Unpack the release archive to a location of your choosing
+- Make sure you have the binary (ComancheProxy.exe) and the config file (config.json) in the same directory
+- In your CLS2Sim program folder (defaults to `C:\Program Files (x86)\Brunner Elektronik AG\CLS2Sim`), back up or copy the file `SimConnect.cfg`
+- Edit `SimConnect.cfg` and to change the `Port` value of the first entry (`[SimConnect]`) to `5001`
+
+## Verification
+- Run MSFS and CLS2Sim: CLS2Sim should continue to connect to the simulator as before, but it should say "Connected to Microsoft Flight Simulator X" now.
+- Run `ComancheProxy.exe`, you should see a terminal window with status messages.
+- Force a reconnect of CLS2Sim, for example by restarting the program or by starting the Profile Manager (you can use Cancel immediately to close the Profile Manager window).
+- When CLS2Sim connects to ComancheProxy, you should see messages in the ComancheProxy window.
+- Load the A2A Comanche in MSFS. You should see a message in the ComancheProxy window indicating that the A2A Comanche has been detected.
+
+## Usage
+- You should be able to start ComancheProxy, CLS2Sim, and MSFS in any order.
+- If you start CLS2Sim before ComancheProxy, you will have to force a reconnect (see above).
+- If you start ComancheProxy first (recommended), it should automatically connect to MSFS when it starts, and CLS2Sim should automatically connect to ComancheProxy.
+- FSEconomy: configure the FSEconomy SimConnect client to use port 5002 (different port!) on `127.0.0.1`. Start MSFS and ComancheProxy first, then start the FSE client.
+
+## Configuration:
+- `config.json` is configured to handle the A2A Comanche for CLS2Sim and to "convert" the AeroElvira Optica (the one that comes with MSFS) into a C172 for FSEconomy.
+- If you don't use one or the other, just ignore the config entries (or remove them, up to you).
+
 ## Architecture
 
 The proxy operates between a SimConnect client (such as CLS2Sim) and the MSFS SimConnect server. It executes two asynchronous pump loops to handle upstream (client-facing) and downstream (sim-facing) traffic.

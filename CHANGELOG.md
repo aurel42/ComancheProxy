@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.1.9] - 2026-03-20
+- Added creation of a release archive
+
 ## [0.1.8] - 2026-03-05
 
 ### Added

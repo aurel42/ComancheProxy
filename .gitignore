@@ -3,6 +3,7 @@ obj/
 logs/
 .vs/
 .vscode/
+release/
 *.user
 *.suo
 *.userprefs

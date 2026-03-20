@@ -27,22 +27,6 @@
           "SourceLVar": "L:Eng1_Thrust"
         }
       }
-    },
-    {
-      "Name": "SimWorks Studios Quest Kodiak",
-      "MatchPattern": "SWS_Kodiak",
-      "Features": {
-        "Trim": {
-          "Enabled": true,
-          "CenterValue": -0.06
-        },
-        "Autopilot": {
-          "Enabled": false
-        },
-        "PropellerThrust": {
-          "Enabled": false
-        }
-      }
     }
   ]
 }

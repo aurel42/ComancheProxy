@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.12] - 2026-03-22
+- Improved port discovery with active connection probing
+- Added `MSFSProcessName` and `ExcludedPorts` configuration options
+
 ## [0.1.11] - 2026-03-20
 - Added `MSFSPort` configuration option
 - Implemented automatic MSFS port discovery

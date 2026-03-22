@@ -1,6 +1,6 @@
 # ComancheProxy
 
-ComancheProxy is a Man-in-the-Middle (MitM) bridge for MSFS SimConnect, implemented as a bidirectional TCP relay. It facilitates transparent pass-through of SimConnect binary packets while providing real-time patching for specific aircraft profiles, specifically the A2A Comanche.
+ComancheProxy is a Man-in-the-Middle (MitM) bridge for MSFS SimConnect, implemented as a bidirectional TCP relay. It forwards SimConnect binary packets while providing real-time patching for specific aircraft profiles, specifically the A2A Comanche.
 
 ## Installation
 - Unpack the release archive to a location of your choosing
@@ -22,6 +22,11 @@ ComancheProxy is a Man-in-the-Middle (MitM) bridge for MSFS SimConnect, implemen
 ## Configuration:
 - `config.json` is configured to handle the A2A Comanche for CLS2Sim and to "convert" the AeroElvira Optica (the one that comes with MSFS) into a C172 for FSEconomy.
 - If you don't use one or the other, just ignore the config entries (or remove them, up to you).
+- By default, ComancheProxy listens on port 15050 for CLS2Sim connections. CLS2Sim configures this port in its `simconnect.cfg` for its own use (I assume) and we piggyback on that.
+- By default, ComancheProxy listens on port 5002 for FSEconomy connections, for purely historical reasons.
+- By default, ComancheProxy tries to connect to MSFS on port 500. By default, MSFS tries to open several SimConnect ports, configured in `SimConnect.xml` in the MSFS installation directory (at least for the Steam version, not sure about its location in the MS Store version). The ports we care about are "Static IPv4 port" and "Dynamic IPv4 port". If MSFS can't bind to the Static IPv4 port (default: 500), for SOME reason, we have to fall back to the dynamic port, which is not ideal, for OTHER reasons.
+- If you notice that ComancheProxy doesn't use the configured port (500) for its connection to MSFS, pick another port that's likely to be unused (e.g. 4711, 5000 or 15000, best below 40000, for reasons), and changing both `MSFSPort` in `config.json` and `Static IPv4 port` in `SimConnect.xml` to that number.
+- If the configured port is not available, ComancheProxy will try to detect the dynamic port. This relies on the correct `MSFSProcessName` being configured (by default, "FlightSimulator2024"). It's barely tested, only tested on SU5, and it might be brittle. It also appears to have side-effects (it can sometimes trigger the "Safe mode" dialog in the next sim session, even though there was no crash). So a properly configured static port is definitely the better way.
 
 ## Architecture
 The proxy operates between a SimConnect client (such as CLS2Sim) and the MSFS SimConnect server. It executes two asynchronous pump loops to handle upstream (client-facing) and downstream (sim-facing) traffic.

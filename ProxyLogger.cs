@@ -75,4 +75,19 @@ public partial class ProxyLogger(ILogger logger)
     [LoggerMessage(Level = LogLevel.Debug, Message = "Client SetData: DefineID={DefineId} ({Variables}) DataSize={DataSize}")]
     public partial void LogClientSetData(uint defineId, string variables, uint dataSize);
 
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Port discovery: probing port {Port}...")]
+    public partial void LogProbeAttempt(int port);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Port discovery: port {Port} confirmed SimConnect (dwID={DwId})")]
+    public partial void LogProbeSuccess(int port, uint dwId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Port discovery: port {Port} failed ({Reason})")]
+    public partial void LogProbeFailure(int port, string reason);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Port discovery: found SimConnect on port {Port}")]
+    public partial void LogDiscoveredPort(int port);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Port discovery: {Message}")]
+    public partial void LogDiscoveryInfo(string message);
+
 }

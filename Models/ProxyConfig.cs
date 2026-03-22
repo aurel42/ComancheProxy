@@ -8,9 +8,17 @@ public sealed class ProxyConfig
     public int FsePort { get; set; }
     public int CLS2SimPort { get; set; } = 5001;
     /// <summary>
-    /// TCP port for connecting to the MSFS SimConnect server. Falls back to automatic discovery on failure.
+    /// TCP port for connecting to the MSFS SimConnect server. Used as the preferred candidate during discovery.
     /// </summary>
     public int MSFSPort { get; set; } = 500;
+    /// <summary>
+    /// MSFS process name (without .exe) for port discovery. Case-insensitive exact match.
+    /// </summary>
+    public string MSFSProcessName { get; set; } = "FlightSimulator2024";
+    /// <summary>
+    /// Ports to exclude from SimConnect discovery (known non-SimConnect MSFS services).
+    /// </summary>
+    public List<int> ExcludedPorts { get; set; } = [501, 19999];
     public List<TitleMapping> TitleMappings { get; set; } = new();
 }
 

@@ -87,6 +87,8 @@ if (fsePort > 0)
 
 var activeBridges = new ConcurrentDictionary<int, Task>();
 int bridgeIdCounter = 0;
+int cachedSimPort = -1;
+var discovery = new SimPortDiscovery(resolvedConfig, logger);
 
 try
 {
@@ -142,25 +144,43 @@ async Task AcceptLoopAsync(TcpListener listener, ClientProfile profile, string p
                     TcpClient simSocket = new TcpClient();
                     try
                     {
-                        int targetPort = resolvedConfig.MSFSPort;
-                        try
+                        int targetPort;
+                        int cached = Volatile.Read(ref cachedSimPort);
+
+                        if (cached > 0)
                         {
-                            await simSocket.ConnectAsync(simAddress, targetPort, ct);
-                        }
-                        catch (SocketException ex)
-                        {
-                            var discoveredPort = SimPortDiscovery.DiscoverPort();
-                            if (discoveredPort.HasValue && discoveredPort.Value != targetPort)
+                            targetPort = cached;
+                            try
                             {
-                                logger.LogInfo($"MSFSPort {targetPort} failed ({ex.Message}). Discovered SimConnect on port {discoveredPort.Value}, retrying...");
+                                await simSocket.ConnectAsync(simAddress, targetPort, ct);
+                            }
+                            catch (SocketException)
+                            {
+                                logger.LogInfo($"Cached port {targetPort} failed, re-discovering...");
+                                Volatile.Write(ref cachedSimPort, -1);
                                 simSocket.Dispose();
                                 simSocket = new TcpClient();
-                                await simSocket.ConnectAsync(simAddress, discoveredPort.Value, ct);
+
+                                int? rediscovered = await discovery.DiscoverPortAsync(ct);
+                                targetPort = rediscovered ?? resolvedConfig.MSFSPort;
+                                Volatile.Write(ref cachedSimPort, rediscovered ?? -1);
+
+                                if (!rediscovered.HasValue)
+                                    logger.LogInfo($"Port discovery found no SimConnect port, falling back to configured MSFSPort {resolvedConfig.MSFSPort}");
+
+                                await simSocket.ConnectAsync(simAddress, targetPort, ct);
                             }
-                            else
-                            {
-                                throw;
-                            }
+                        }
+                        else
+                        {
+                            int? discoveredPort = await discovery.DiscoverPortAsync(ct);
+                            targetPort = discoveredPort ?? resolvedConfig.MSFSPort;
+                            Volatile.Write(ref cachedSimPort, discoveredPort ?? -1);
+
+                            if (!discoveredPort.HasValue)
+                                logger.LogInfo($"Port discovery found no SimConnect port, falling back to configured MSFSPort {resolvedConfig.MSFSPort}");
+
+                            await simSocket.ConnectAsync(simAddress, targetPort, ct);
                         }
 
                         // Per-connection state instances
@@ -176,6 +196,10 @@ async Task AcceptLoopAsync(TcpListener listener, ClientProfile profile, string p
                     {
                         simSocket.Dispose();
                     }
+                }
+                catch (SocketException)
+                {
+                    logger.LogError("Connection refused (waiting for sim)");
                 }
                 catch (OperationCanceledException) { }
                 catch (Exception ex)

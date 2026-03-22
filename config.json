@@ -1,5 +1,7 @@
 {
   "MSFSPort": 500,
+  "MSFSProcessName": "FlightSimulator2024",
+  "ExcludedPorts": [501, 19999],
   "CLS2SimPort": 15050,
   "AircraftProfiles": [
     {
